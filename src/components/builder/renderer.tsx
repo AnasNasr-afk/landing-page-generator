@@ -70,7 +70,7 @@ function CtaButton({ cta, lang, onFire }: { cta: Cta; lang: Lang; onFire?: ((c: 
       className={cn(base, variants[cta.variant] ?? variants["primary"])}
     >
       {t(cta.label, lang)}
-      <LucideIcon name={icon[cta.action] ?? "ArrowRight"} className="size-4 rtl:rotate-180" />
+      <LucideIcon name={icon[cta.action] ?? "ArrowRight"} className={cn("size-4", cta.action === "internal" && "rtl:rotate-180")} />
     </button>
   );
 }
