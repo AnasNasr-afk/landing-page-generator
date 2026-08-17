@@ -12,10 +12,10 @@ import {
 } from "@/lib/builder-types";
 import { IMAGE_MAP, MOCK_LISTINGS } from "@/lib/builder-content";
 
-export function LucideIcon({ name, className }: { name: string; className?: string }) {
-  const Cmp = (Icons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[
-    name
-  ];
+export function LucideIcon({ name, className }: { name: string; className?: string | undefined }) {
+  const Cmp = (
+    Icons as unknown as Record<string, React.ComponentType<{ className?: string | undefined }>>
+  )[name];
   const Fallback = Icons.Circle;
   const C = Cmp ?? Fallback;
   return <C className={className} />;
@@ -67,7 +67,7 @@ function CtaButton({ cta, lang, onFire }: { cta: Cta; lang: Lang; onFire?: (c: C
     <button
       type="button"
       onClick={() => onFire?.(cta)}
-      className={cn(base, variants[cta.variant] ?? variants.primary)}
+      className={cn(base, variants[cta.variant] ?? variants["primary"])}
     >
       {t(cta.label, lang)}
       <LucideIcon name={icon[cta.action] ?? "ArrowRight"} className="size-4 rtl:rotate-180" />
@@ -162,8 +162,8 @@ export function ElementView({
 }: {
   el: PageElement;
   lang: Lang;
-  editing?: boolean;
-  onFire?: (c: Cta) => void;
+  editing?: boolean | undefined;
+  onFire?: ((c: Cta) => void) | undefined;
 }) {
   const p = el.props as Record<string, never> as Record<string, unknown>;
   const g = <T,>(k: string) => p[k] as T;
@@ -362,7 +362,7 @@ export function ContainerView({
   container: Container;
   lang: Lang;
   children: (colIndex: number) => React.ReactNode;
-  className?: string;
+  className?: string | undefined;
 }) {
   void lang;
   return (
@@ -400,7 +400,7 @@ export function PageRenderer({
 }: {
   containers: Container[];
   lang: Lang;
-  onFire?: (c: Cta) => void;
+  onFire?: ((c: Cta) => void) | undefined;
 }) {
   return (
     <div dir={lang === "ar" ? "rtl" : "ltr"} className="bg-background">
@@ -408,7 +408,7 @@ export function PageRenderer({
         <ContainerView key={c.id} container={c} lang={lang}>
           {(i) => (
             <div className="space-y-5">
-              {c.columns[i].map((el) => (
+              {(c.columns[i] ?? []).map((el) => (
                 <ElementView key={el.id} el={el} lang={lang} onFire={onFire} />
               ))}
             </div>
