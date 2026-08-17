@@ -1,24 +1,613 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
+import { Toaster } from "@/components/ui/sonner";
+import { cn } from "@/lib/utils";
+import {
+  COLUMN_COUNT,
+  type Container,
+  type ContainerLayout,
+  type Cta,
+  type ElementType,
+  type Lang,
+  type LandingPage,
+  type Template,
+  reId,
+  t,
+  uid,
+} from "@/lib/builder-types";
+import { newContainer, newElement, seedPage, seedTemplates } from "@/lib/builder-content";
+import { ContainerView, ElementView, LucideIcon, PageRenderer } from "@/components/builder/renderer";
+import { ElementsPanel } from "@/components/builder/elements-panel";
+import { PropertiesPanel } from "@/components/builder/properties-panel";
+import { PageSettingsPanel, SeoPanel } from "@/components/builder/seo-panel";
+import { AssetsScreen, SaveTemplateDialog, TemplatesScreen } from "@/components/builder/templates-screen";
 
-// No head() here: the home route inherits title/description/og/twitter from
-// __root.tsx, and ships no og:image so serve-time hosting can inject the
-// project's social preview (explicit og:image or latest screenshot).
 export const Route = createFileRoute("/")({
-  component: Index,
+  head: () => ({
+    meta: [
+      { title: "4Sale Landing Page Builder — No-code Page Studio" },
+      {
+        name: "description",
+        content:
+          "Self-service 4Sale landing page builder: containers, CTAs, lead forms, marketplace listings, reusable templates and an SEO & AI search panel.",
+      },
+      { property: "og:title", content: "4Sale Landing Page Builder" },
+      {
+        property: "og:description",
+        content:
+          "Build, preview and publish branded 4Sale landing pages without a designer or developer.",
+      },
+      { property: "og:type", content: "website" },
+      { property: "og:url", content: "/" },
+      { name: "twitter:card", content: "summary_large_image" },
+    ],
+    links: [{ rel: "canonical", href: "/" }],
+  }),
+  component: BuilderApp,
 });
 
-// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
-function Index() {
+type Nav = "build" | "templates" | "seo" | "assets";
+type Selection = { containerId: string; colIndex: number | null; elementId: string | null } | null;
+
+const NAV: { key: Nav; icon: string; label: string }[] = [
+  { key: "build", icon: "LayoutPanelTop", label: "Build" },
+  { key: "templates", icon: "LayoutTemplate", label: "Templates" },
+  { key: "seo", icon: "Search", label: "SEO" },
+  { key: "assets", icon: "Images", label: "Assets" },
+];
+
+function BuilderApp() {
+  const [page, setPage] = useState<LandingPage>(seedPage);
+  const [templates, setTemplates] = useState<Template[]>(seedTemplates);
+  const [nav, setNav] = useState<Nav>("build");
+  const [lang, setLang] = useState<Lang>("en");
+  const [sel, setSel] = useState<Selection>(null);
+  const [preview, setPreview] = useState(false);
+  const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
+  const [saveTpl, setSaveTpl] = useState(false);
+
+  const container = useMemo(
+    () => page.containers.find((c) => c.id === sel?.containerId),
+    [page.containers, sel],
+  );
+  const element = useMemo(() => {
+    if (!container || sel?.colIndex == null || !sel.elementId) return undefined;
+    return container.columns[sel.colIndex]?.find((e) => e.id === sel.elementId);
+  }, [container, sel]);
+
+  const setContainers = (fn: (cs: Container[]) => Container[]) =>
+    setPage((p) => ({ ...p, containers: fn(p.containers), status: "draft" }));
+
+  const updateContainer = (patch: Partial<Container>) =>
+    setContainers((cs) =>
+      cs.map((c) => {
+        if (c.id !== sel?.containerId) return c;
+        let columns = c.columns;
+        if (patch.layout) {
+          const target = COLUMN_COUNT[patch.layout];
+          columns = Array.from({ length: target }, (_, i) => c.columns[i] ?? []);
+          if (c.columns.length > target) {
+            const overflow = c.columns.slice(target).flat();
+            columns = columns.map((col, i) => (i === target - 1 ? [...col, ...overflow] : col));
+          }
+        }
+        return { ...c, ...patch, columns };
+      }),
+    );
+
+  const updateElement = (patch: Record<string, unknown>) =>
+    setContainers((cs) =>
+      cs.map((c) =>
+        c.id !== sel?.containerId
+          ? c
+          : {
+              ...c,
+              columns: c.columns.map((col, i) =>
+                i !== sel?.colIndex
+                  ? col
+                  : col.map((e) => (e.id === sel.elementId ? { ...e, props: { ...e.props, ...patch } } : e)),
+              ),
+            },
+      ),
+    );
+
+  const addContainer = (layout: ContainerLayout) => {
+    const c = newContainer(layout, COLUMN_COUNT[layout]);
+    setContainers((cs) => {
+      const at = cs.findIndex((x) => x.id === sel?.containerId);
+      if (at === -1) return [...cs, c];
+      const next = [...cs];
+      next.splice(at + 1, 0, c);
+      return next;
+    });
+    setSel({ containerId: c.id, colIndex: 0, elementId: null });
+    toast.success("Container added");
+  };
+
+  const addElement = (type: ElementType) => {
+    if (!sel || sel.colIndex == null) return;
+    const el = newElement(type);
+    setContainers((cs) =>
+      cs.map((c) =>
+        c.id !== sel.containerId
+          ? c
+          : { ...c, columns: c.columns.map((col, i) => (i === sel.colIndex ? [...col, el] : col)) },
+      ),
+    );
+    setSel({ ...sel, elementId: el.id });
+  };
+
+  const moveContainer = (dir: -1 | 1) =>
+    setContainers((cs) => {
+      const i = cs.findIndex((c) => c.id === sel?.containerId);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= cs.length) return cs;
+      const next = [...cs];
+      const [x] = next.splice(i, 1);
+      next.splice(j, 0, x as Container);
+      return next;
+    });
+
+  const duplicateContainer = () =>
+    setContainers((cs) => {
+      const i = cs.findIndex((c) => c.id === sel?.containerId);
+      if (i < 0) return cs;
+      const copy = reId([cs[i] as Container])[0] as Container;
+      const next = [...cs];
+      next.splice(i + 1, 0, copy);
+      return next;
+    });
+
+  const deleteContainer = () => {
+    setContainers((cs) => cs.filter((c) => c.id !== sel?.containerId));
+    setSel(null);
+  };
+
+  const moveElement = (dir: -1 | 1) =>
+    setContainers((cs) =>
+      cs.map((c) =>
+        c.id !== sel?.containerId
+          ? c
+          : {
+              ...c,
+              columns: c.columns.map((col, ci) => {
+                if (ci !== sel?.colIndex) return col;
+                const i = col.findIndex((e) => e.id === sel.elementId);
+                const j = i + dir;
+                if (i < 0 || j < 0 || j >= col.length) return col;
+                const next = [...col];
+                const [x] = next.splice(i, 1);
+                next.splice(j, 0, x!);
+                return next;
+              }),
+            },
+      ),
+    );
+
+  const deleteElement = () => {
+    setContainers((cs) =>
+      cs.map((c) =>
+        c.id !== sel?.containerId
+          ? c
+          : {
+              ...c,
+              columns: c.columns.map((col, ci) =>
+                ci !== sel?.colIndex ? col : col.filter((e) => e.id !== sel.elementId),
+              ),
+            },
+      ),
+    );
+    setSel(sel ? { ...sel, elementId: null } : null);
+  };
+
+  const fireCta = (c: Cta) =>
+    toast(`Tracking: ${c.event}`, { description: `${c.action} → ${c.destination || "—"}` });
+
+  const startFromTemplate = (tpl: Template) => {
+    setPage((p) => ({
+      ...p,
+      id: uid(),
+      name: `${tpl.name} page`,
+      slug: tpl.name.toLowerCase().replace(/\s+/g, "-"),
+      status: "draft",
+      containers: reId(tpl.containers),
+    }));
+    setSel(null);
+    setNav("build");
+    toast.success(`New page started from "${tpl.name}"`);
+  };
+
+  const targetLabel = container
+    ? `${container.name} · column ${(sel?.colIndex ?? 0) + 1}`
+    : "";
+
   return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
+    <div className="flex h-screen w-full overflow-hidden bg-neutral-surface text-foreground">
+      <Toaster position="bottom-right" />
+
+      {/* Navigation rail */}
+      <nav className="flex w-16 shrink-0 flex-col items-center gap-1 border-e border-border bg-background py-3">
+        <div className="mb-3 flex size-9 items-center justify-center rounded-xl bg-brand text-xs font-black text-brand-foreground">
+          4S
+        </div>
+        {NAV.map((n) => (
+          <button
+            key={n.key}
+            type="button"
+            onClick={() => setNav(n.key)}
+            className={cn(
+              "flex w-14 flex-col items-center gap-1 rounded-xl py-2 text-[10px] font-medium transition",
+              nav === n.key ? "bg-brand-soft text-brand" : "text-muted-foreground hover:bg-neutral-surface",
+            )}
+          >
+            <LucideIcon name={n.icon} className="size-4" />
+            {n.label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Top bar */}
+        <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-background px-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-sm font-semibold">{page.name}</span>
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                    page.status === "published"
+                      ? "bg-emerald-100 text-emerald-800"
+                      : "bg-neutral-surface text-muted-foreground",
+                  )}
+                >
+                  {page.status === "published" ? "Published" : "Draft"}
+                </span>
+              </div>
+              <span className="text-[11px] text-muted-foreground">
+                q84sale.com/{lang}/{page.slug}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-lg bg-neutral-surface p-1">
+              {(["en", "ar"] as Lang[]).map((l) => (
+                <button
+                  key={l}
+                  type="button"
+                  onClick={() => setLang(l)}
+                  className={cn(
+                    "rounded-md px-3 py-1 text-xs font-semibold uppercase transition",
+                    lang === l ? "bg-background text-brand shadow-panel" : "text-muted-foreground",
+                  )}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+            <div className="flex rounded-lg bg-neutral-surface p-1">
+              {(["desktop", "mobile"] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setDevice(d)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1.5 transition",
+                    device === d ? "bg-background text-brand shadow-panel" : "text-muted-foreground",
+                  )}
+                >
+                  <LucideIcon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSaveTpl(true)}
+              className="rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-neutral-surface"
+            >
+              Save as template
+            </button>
+            <button
+              type="button"
+              onClick={() => toast.success("Draft saved")}
+              className="rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-neutral-surface"
+            >
+              Save draft
+            </button>
+            <button
+              type="button"
+              onClick={() => setPreview(true)}
+              className="rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-neutral-surface"
+            >
+              Preview
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPage((p) => ({ ...p, status: "published" }));
+                toast.success("Page published", { description: `q84sale.com/${lang}/${page.slug}` });
+              }}
+              className="rounded-lg bg-brand px-4 py-2 text-xs font-semibold text-brand-foreground shadow-brand hover:bg-brand-strong"
+            >
+              Publish
+            </button>
+          </div>
+        </header>
+
+        {nav === "build" ? (
+          <div className="flex min-h-0 flex-1">
+            <aside className="w-72 shrink-0 overflow-hidden border-e border-border bg-background">
+              <ElementsPanel
+                onAddContainer={addContainer}
+                onAddElement={addElement}
+                canAddElement={!!container && sel?.colIndex != null}
+                targetLabel={targetLabel}
+              />
+            </aside>
+
+            <main className="min-w-0 flex-1 overflow-y-auto p-6">
+              <div
+                className={cn(
+                  "mx-auto overflow-hidden rounded-2xl bg-background shadow-card transition-all",
+                  device === "mobile" ? "max-w-sm" : "max-w-none",
+                )}
+                dir={lang === "ar" ? "rtl" : "ltr"}
+              >
+                {page.containers.map((c) => {
+                  const active = sel?.containerId === c.id && !sel.elementId;
+                  return (
+                    <div
+                      key={c.id}
+                      className={cn(
+                        "group relative border-2 transition",
+                        active ? "border-brand" : "border-transparent hover:border-brand/30",
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSel({ containerId: c.id, colIndex: 0, elementId: null });
+                      }}
+                    >
+                      <div
+                        className={cn(
+                          "absolute -top-px start-0 z-20 rounded-be-lg bg-brand px-2 py-0.5 text-[10px] font-semibold text-brand-foreground transition",
+                          active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+                        )}
+                      >
+                        {c.name}
+                      </div>
+                      <ContainerView container={c} lang={lang}>
+                        {(ci) => {
+                          const col = c.columns[ci] ?? [];
+                          const colActive = active && sel?.colIndex === ci;
+                          return (
+                            <div
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSel({ containerId: c.id, colIndex: ci, elementId: null });
+                              }}
+                              className={cn(
+                                "min-h-16 space-y-5 rounded-xl border border-dashed p-2 transition",
+                                colActive ? "border-brand bg-brand/5" : "border-transparent hover:border-brand/30",
+                              )}
+                            >
+                              {col.length === 0 && (
+                                <div className="flex h-16 items-center justify-center text-[11px] text-muted-foreground">
+                                  Empty column — pick an element on the left
+                                </div>
+                              )}
+                              {col.map((el) => {
+                                const elActive = sel?.elementId === el.id;
+                                return (
+                                  <div
+                                    key={el.id}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSel({ containerId: c.id, colIndex: ci, elementId: el.id });
+                                    }}
+                                    className={cn(
+                                      "relative rounded-lg outline-offset-4 transition",
+                                      elActive ? "outline-2 outline-brand" : "hover:outline-2 hover:outline-brand/30",
+                                    )}
+                                  >
+                                    <ElementView el={el} lang={lang} editing onFire={fireCta} />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        }}
+                      </ContainerView>
+                    </div>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  onClick={() => addContainer("1")}
+                  className="flex w-full items-center justify-center gap-2 border-t border-dashed border-border py-6 text-xs font-medium text-muted-foreground hover:bg-brand-soft/50 hover:text-brand"
+                >
+                  <LucideIcon name="Plus" className="size-4" /> Add container
+                </button>
+              </div>
+            </main>
+
+            <aside className="w-80 shrink-0 overflow-hidden border-s border-border bg-background">
+              <div className="flex h-full flex-col">
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  <PropertiesPanel
+                    container={container}
+                    element={element}
+                    lang={lang}
+                    updateContainer={updateContainer}
+                    updateElement={updateElement}
+                    onDeleteElement={deleteElement}
+                    onMoveElement={moveElement}
+                    onDuplicateContainer={duplicateContainer}
+                    onDeleteContainer={deleteContainer}
+                    onMoveContainer={moveContainer}
+                  />
+                </div>
+                <div className="max-h-[45%] shrink-0 overflow-y-auto border-t border-border bg-neutral-surface/40">
+                  <PageSettingsPanel
+                    page={page}
+                    lang={lang}
+                    setLang={setLang}
+                    onChange={(patch) => setPage((p) => ({ ...p, ...patch }))}
+                  />
+                </div>
+              </div>
+            </aside>
+          </div>
+        ) : nav === "templates" ? (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <TemplatesScreen
+              templates={templates}
+              onUse={startFromTemplate}
+              onBlank={() => {
+                setPage((p) => ({
+                  ...p,
+                  id: uid(),
+                  name: "Untitled landing page",
+                  slug: "untitled-landing-page",
+                  status: "draft",
+                  containers: [newContainer("1", 1)],
+                }));
+                setSel(null);
+                setNav("build");
+              }}
+              onDelete={(id) => setTemplates((ts) => ts.filter((x) => x.id !== id))}
+            />
+          </div>
+        ) : nav === "seo" ? (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <SeoPanel
+              page={page}
+              lang={lang}
+              onChange={(patch) => setPage((p) => ({ ...p, seo: { ...p.seo, ...patch } }))}
+            />
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <AssetsScreen />
+          </div>
+        )}
+      </div>
+
+      {preview && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-neutral-900/60">
+          <div className="flex h-14 items-center justify-between bg-background px-4">
+            <div className="text-sm font-semibold">
+              Preview · <span className="font-normal text-muted-foreground">q84sale.com/{lang}/{page.slug}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex rounded-lg bg-neutral-surface p-1">
+                {(["en", "ar"] as Lang[]).map((l) => (
+                  <button
+                    key={l}
+                    type="button"
+                    onClick={() => setLang(l)}
+                    className={cn(
+                      "rounded-md px-3 py-1 text-xs font-semibold uppercase",
+                      lang === l ? "bg-background text-brand shadow-panel" : "text-muted-foreground",
+                    )}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </div>
+              <div className="flex rounded-lg bg-neutral-surface p-1">
+                {(["desktop", "mobile"] as const).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setDevice(d)}
+                    className={cn(
+                      "rounded-md px-2.5 py-1.5",
+                      device === d ? "bg-background text-brand shadow-panel" : "text-muted-foreground",
+                    )}
+                  >
+                    <LucideIcon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreview(false)}
+                className="rounded-lg bg-brand px-4 py-2 text-xs font-semibold text-brand-foreground"
+              >
+                Close preview
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto bg-neutral-surface p-4">
+            <div
+              className={cn(
+                "mx-auto overflow-hidden rounded-2xl bg-background shadow-lift",
+                device === "mobile" ? "max-w-sm" : "max-w-none",
+              )}
+            >
+              <SiteChrome lang={lang} />
+              <PageRenderer containers={page.containers} lang={lang} onFire={fireCta} />
+              <SiteFooter lang={lang} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <SaveTemplateDialog
+        open={saveTpl}
+        onClose={() => setSaveTpl(false)}
+        onSave={(name, description) => {
+          setTemplates((ts) => [
+            { id: uid(), name, description, category: "Custom", containers: reId(page.containers) },
+            ...ts,
+          ]);
+          setSaveTpl(false);
+          toast.success(`Template "${name}" saved`);
+        }}
       />
     </div>
+  );
+}
+
+function SiteChrome({ lang }: { lang: Lang }) {
+  const links =
+    lang === "ar"
+      ? ["السيارات", "العقارات", "إلكترونيات", "خدمات"]
+      : ["Cars", "Real Estate", "Electronics", "Services"];
+  return (
+    <div dir={lang === "ar" ? "rtl" : "ltr"} className="border-b border-border bg-background">
+      <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
+        <div className="flex items-center gap-6">
+          <div className="flex size-8 items-center justify-center rounded-lg bg-brand text-[11px] font-black text-brand-foreground">
+            4S
+          </div>
+          <nav className="hidden gap-5 text-sm font-medium text-foreground/70 md:flex">
+            {links.map((l) => (
+              <span key={l}>{l}</span>
+            ))}
+          </nav>
+        </div>
+        <div className="flex items-center gap-2 text-xs font-semibold">
+          <span className="rounded-lg border border-border px-3 py-1.5">{lang === "ar" ? "English" : "العربية"}</span>
+          <span className="rounded-lg bg-brand px-3 py-1.5 text-brand-foreground">
+            {lang === "ar" ? "أضف إعلانك" : "Post an ad"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SiteFooter({ lang }: { lang: Lang }) {
+  return (
+    <footer dir={lang === "ar" ? "rtl" : "ltr"} className="border-t border-border bg-neutral-surface">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-6 text-xs text-muted-foreground">
+        <span>© {new Date().getFullYear()} 4Sale — q84sale.com</span>
+        <span>{t({ en: "Terms · Privacy · Help", ar: "الشروط · الخصوصية · المساعدة" }, lang)}</span>
+      </div>
+    </footer>
   );
 }
