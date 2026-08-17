@@ -1,0 +1,126 @@
+export type Lang = "en" | "ar";
+
+export type LText = { en: string; ar: string };
+
+export const t = (v: LText | undefined, lang: Lang) =>
+  (v ? v[lang] || v.en : "") as string;
+
+export type Align = "start" | "center" | "end";
+
+export type CtaAction =
+  | "internal"
+  | "external"
+  | "scroll"
+  | "app"
+  | "search";
+
+export type Cta = {
+  label: LText;
+  action: CtaAction;
+  destination: string;
+  event: string;
+  variant: "primary" | "secondary" | "inverse";
+};
+
+export type FormField = {
+  id: string;
+  label: LText;
+  type: "text" | "phone" | "email" | "dropdown" | "checkbox";
+  required: boolean;
+  options?: string;
+};
+
+export type ElementType =
+  | "heading"
+  | "text"
+  | "image"
+  | "video"
+  | "cards"
+  | "icons"
+  | "cta"
+  | "ctaSection"
+  | "form"
+  | "listings"
+  | "faq"
+  | "steps"
+  | "divider"
+  | "spacer";
+
+export type ElementProps = Record<string, unknown>;
+
+export type PageElement = {
+  id: string;
+  type: ElementType;
+  props: ElementProps;
+};
+
+export type ContainerLayout = "1" | "50-50" | "35-65" | "65-35" | "3";
+
+export type Container = {
+  id: string;
+  name: string;
+  layout: ContainerLayout;
+  background: "white" | "soft" | "brand" | "gray";
+  paddingY: number;
+  gap: number;
+  radius: number;
+  contentWidth: "narrow" | "default" | "wide" | "full";
+  align: Align;
+  columns: PageElement[][];
+};
+
+export type SeoSettings = {
+  title: LText;
+  description: LText;
+  slug: string;
+  targetQuery: LText;
+  index: boolean;
+  canonical: string;
+  aiAnswer: LText;
+};
+
+export type LandingPage = {
+  id: string;
+  name: string;
+  slug: string;
+  status: "draft" | "published";
+  languages: Lang[];
+  seo: SeoSettings;
+  containers: Container[];
+};
+
+export type Template = {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  containers: Container[];
+  system?: boolean;
+};
+
+export const COLUMN_COUNT: Record<ContainerLayout, number> = {
+  "1": 1,
+  "50-50": 2,
+  "35-65": 2,
+  "65-35": 2,
+  "3": 3,
+};
+
+export const LAYOUT_LABEL: Record<ContainerLayout, string> = {
+  "1": "1 column",
+  "50-50": "2 columns — 50/50",
+  "35-65": "2 columns — 35/65",
+  "65-35": "2 columns — 65/35",
+  "3": "3 columns",
+};
+
+export const uid = () => Math.random().toString(36).slice(2, 10);
+
+export const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+
+export const reId = (containers: Container[]): Container[] =>
+  clone(containers).map((c) => ({
+    ...c,
+    id: uid(),
+    columns: c.columns.map((col) => col.map((el) => ({ ...el, id: uid() }))),
+  }));
