@@ -48,7 +48,7 @@ const COLS: Record<Container["layout"], string> = {
   "3": "grid-cols-1 md:grid-cols-3",
 };
 
-function CtaButton({ cta, lang, onFire }: { cta: Cta; lang: Lang; onFire?: (c: Cta) => void }) {
+function CtaButton({ cta, lang, onFire }: { cta: Cta; lang: Lang; onFire?: ((c: Cta) => void) | undefined }) {
   const base =
     "inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold transition-all active:scale-[0.98]";
   const variants: Record<string, string> = {
@@ -75,7 +75,7 @@ function CtaButton({ cta, lang, onFire }: { cta: Cta; lang: Lang; onFire?: (c: C
   );
 }
 
-function LeadForm({ el, lang, onFire }: { el: PageElement; lang: Lang; onFire?: (c: Cta) => void }) {
+function LeadForm({ el, lang, onFire }: { el: PageElement; lang: Lang; onFire?: ((c: Cta) => void) | undefined }) {
   const p = el.props as {
     title: LText;
     anchor: string;
