@@ -9,6 +9,14 @@ import {
   t,
 } from "@/lib/builder-types";
 import { IMAGE_MAP } from "@/lib/builder-content";
+import {
+  TONE_COLOR,
+  backgroundStyle,
+  hasCustomBg,
+  overlayStyle,
+  resolveTone,
+  toCssText,
+} from "@/lib/container-bg";
 import { FORM_ACTION, resolveAssetUrl } from "./config";
 import { attrs, cls, esc, escLines, fieldName } from "./html";
 import { iconSvg } from "./icon";
@@ -391,9 +399,25 @@ function serializeContainer(c: Container, o: SerializeOptions): string {
 
   const vAlign = c.align === "center" ? "fs-lp-va-center" : c.align === "end" ? "fs-lp-va-end" : "";
 
+  // A custom background is per-container data (a hex value or an image URL), so
+  // it cannot live in the shared stylesheet the way the presets do — it is
+  // inlined on the section instead, and the preset class is dropped.
+  const custom = hasCustomBg(c);
+  const scrim = overlayStyle(c);
+  // Background images take the same absolute-URL treatment as element images:
+  // a relative path resolves against this app, not the host page.
+  const resolved =
+    c.bg?.type === "image"
+      ? { ...c, bg: { ...c.bg, src: resolveAssetUrl(c.bg.src, o.assetOrigin) } }
+      : c;
+  const bgCss = custom
+    ? `;${toCssText(backgroundStyle(resolved))};color:${TONE_COLOR[resolveTone(c)]}`
+    : "";
+
   return (
-    `<section class="${cls("fs-lp-sec", `fs-lp-bg-${c.background}`)}"` +
-    ` style="padding-block:${num(c.paddingY, 0)}px${c.radius ? `;border-radius:${num(c.radius, 0)}px` : ""}">` +
+    `<section class="${cls("fs-lp-sec", custom ? "fs-lp-bg-custom" : `fs-lp-bg-${c.background}`)}"` +
+    ` style="padding-block:${num(c.paddingY, 0)}px${c.radius ? `;border-radius:${num(c.radius, 0)}px` : ""}${bgCss}">` +
+    (scrim ? `<div class="fs-lp-scrim" style="${toCssText({ backgroundColor: scrim.backgroundColor })}"></div>` : "") +
     `<div class="${cls("fs-lp-wrap", `fs-lp-w-${c.contentWidth}`)}">` +
     `<div class="${cls("fs-lp-grid", `fs-lp-l-${c.layout}`, vAlign)}" style="gap:${num(c.gap, 0)}px">` +
     inner +

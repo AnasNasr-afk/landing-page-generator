@@ -56,11 +56,33 @@ export type PageElement = {
 
 export type ContainerLayout = "1" | "50-50" | "35-65" | "65-35" | "3";
 
+/**
+ * A background beyond the four brand presets.
+ *
+ * Kept as a separate optional field rather than folded into `background` so
+ * that every page and template saved before this existed still loads: when
+ * `bg` is absent the preset is used exactly as before.
+ */
+export type ContainerBg =
+  | { type: "color"; color: string }
+  | {
+      type: "image";
+      src: string;
+      size: "cover" | "contain";
+      position: "top" | "center" | "bottom";
+      /** Percentage of black laid over the image so text stays readable. 0–80. */
+      overlay: number;
+    };
+
 export type Container = {
   id: string;
   name: string;
   layout: ContainerLayout;
   background: "white" | "soft" | "brand" | "gray";
+  /** Overrides `background` when present; cleared by setting it back to undefined. */
+  bg?: ContainerBg | undefined;
+  /** `auto` derives readable text from the background's brightness. */
+  textTone?: "auto" | "light" | "dark";
   paddingY: number;
   gap: number;
   radius: number;

@@ -78,6 +78,11 @@ export const PUBLISH_CSS = `
 .fs-lp-bg-soft{background:var(--fs-brand-soft)}
 .fs-lp-bg-gray{background:var(--fs-surface)}
 .fs-lp-bg-brand{background:var(--fs-brand);color:var(--fs-brand-fg)}
+/* Custom colour/image backgrounds are inlined per section; these only provide
+   the stacking context so the scrim sits over the image and under the copy. */
+.fs-lp-bg-custom{position:relative;overflow:hidden;background-repeat:no-repeat}
+.fs-lp-scrim{position:absolute;inset:0;pointer-events:none}
+.fs-lp-bg-custom > .fs-lp-wrap{position:relative}
 .fs-lp-wrap{width:100%;margin-inline:auto;padding-inline:24px}
 .fs-lp-w-narrow{max-width:768px}
 .fs-lp-w-default{max-width:1152px}

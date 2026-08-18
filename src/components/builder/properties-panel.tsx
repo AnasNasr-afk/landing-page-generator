@@ -1,6 +1,7 @@
 import {
   type Align,
   type Container,
+  type ContainerBg,
   type ContainerLayout,
   type Cta,
   type FormField,
@@ -574,18 +575,7 @@ export function PropertiesPanel({
             </Field>
           </Section>
           <Section title="Design">
-            <Field label="Background">
-              <Segmented
-                value={container.background}
-                onChange={(v) => updateContainer({ background: v })}
-                options={[
-                  { value: "white", label: "White" },
-                  { value: "soft", label: "Light blue" },
-                  { value: "gray", label: "Gray" },
-                  { value: "brand", label: "Blue" },
-                ]}
-              />
-            </Field>
+            <BackgroundEditor container={container} updateContainer={updateContainer} />
             <Field label="Vertical padding">
               <SliderInput value={container.paddingY} onChange={(v) => updateContainer({ paddingY: v })} />
             </Field>
@@ -603,6 +593,169 @@ export function PropertiesPanel({
         </>
       )}
     </div>
+  );
+}
+
+/** Background picker: brand preset, any colour, or an image with a readability scrim. */
+function BackgroundEditor({
+  container,
+  updateContainer,
+}: {
+  container: Container;
+  updateContainer: (patch: Partial<Container>) => void;
+}) {
+  const bg = container.bg;
+  const mode: "preset" | "color" | "image" = bg?.type ?? "preset";
+
+  const setMode = (m: "preset" | "color" | "image") => {
+    if (m === "preset") return updateContainer({ bg: undefined, textTone: "auto" });
+    if (m === "color")
+      return updateContainer({ bg: { type: "color", color: "#1d4aff" }, textTone: "auto" });
+    updateContainer({
+      bg: { type: "image", src: "", size: "cover", position: "center", overlay: 35 },
+      textTone: "auto",
+    });
+  };
+
+  const patchImage = (patch: Partial<Extract<ContainerBg, { type: "image" }>>) => {
+    if (bg?.type !== "image") return;
+    updateContainer({ bg: { ...bg, ...patch } });
+  };
+
+  // Held as a data URL so it survives re-renders. Object URLs would die on
+  // reload, and there is no asset host yet — see the warning below.
+  const readFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => patchImage({ src: String(reader.result) });
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <>
+      <Field label="Background">
+        <Segmented
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: "preset", label: "Preset" },
+            { value: "color", label: "Color" },
+            { value: "image", label: "Image" },
+          ]}
+        />
+      </Field>
+
+      {mode === "preset" && (
+        <Field label="Preset">
+          <Segmented
+            value={container.background}
+            onChange={(v) => updateContainer({ background: v })}
+            options={[
+              { value: "white", label: "White" },
+              { value: "soft", label: "Light blue" },
+              { value: "gray", label: "Gray" },
+              { value: "brand", label: "Blue" },
+            ]}
+          />
+        </Field>
+      )}
+
+      {bg?.type === "color" && (
+        <Field label="Color">
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              value={bg.color}
+              onChange={(e) => updateContainer({ bg: { type: "color", color: e.target.value } })}
+              className="size-9 shrink-0 cursor-pointer rounded-lg border border-border bg-background"
+            />
+            <TextInput
+              value={bg.color}
+              onChange={(e) => updateContainer({ bg: { type: "color", color: e.target.value } })}
+              placeholder="#1d4aff"
+            />
+          </div>
+        </Field>
+      )}
+
+      {bg?.type === "image" && (
+        <>
+          <Field label="Image URL">
+            <TextInput
+              value={bg.src.startsWith("data:") ? "" : bg.src}
+              placeholder="https://…"
+              onChange={(e) => patchImage({ src: e.target.value })}
+            />
+          </Field>
+          <label className="block cursor-pointer rounded-xl border border-dashed border-border bg-neutral-surface p-3 text-center hover:border-brand">
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) readFile(f);
+              }}
+            />
+            <LucideIcon name="UploadCloud" className="mx-auto size-4 text-brand" />
+            <span className="mt-1 block text-[11px] font-medium">
+              {bg.src.startsWith("data:") ? "Replace uploaded image" : "Upload from computer"}
+            </span>
+          </label>
+          {bg.src.startsWith("data:") && (
+            <div className="flex items-start gap-2 rounded-lg bg-amber-100 p-2.5 text-[11px] text-amber-800">
+              <LucideIcon name="TriangleAlert" className="mt-0.5 size-3.5 shrink-0" />
+              Preview only — uploaded files aren’t hosted yet, so this image won’t appear on the
+              published page. Use a URL for anything you intend to publish.
+            </div>
+          )}
+          <Field label="Fit">
+            <Segmented
+              value={bg.size}
+              onChange={(v) => patchImage({ size: v })}
+              options={[
+                { value: "cover", label: "Cover" },
+                { value: "contain", label: "Contain" },
+              ]}
+            />
+          </Field>
+          <Field label="Position">
+            <Segmented
+              value={bg.position}
+              onChange={(v) => patchImage({ position: v })}
+              options={[
+                { value: "top", label: "Top" },
+                { value: "center", label: "Center" },
+                { value: "bottom", label: "Bottom" },
+              ]}
+            />
+          </Field>
+          <Field label="Darken for readability">
+            <SliderInput
+              value={bg.overlay}
+              min={0}
+              max={80}
+              step={5}
+              suffix="%"
+              onChange={(v) => patchImage({ overlay: v })}
+            />
+          </Field>
+        </>
+      )}
+
+      {mode !== "preset" && (
+        <Field label="Text color">
+          <Segmented
+            value={container.textTone ?? "auto"}
+            onChange={(v) => updateContainer({ textTone: v })}
+            options={[
+              { value: "auto", label: "Auto" },
+              { value: "light", label: "Light" },
+              { value: "dark", label: "Dark" },
+            ]}
+          />
+        </Field>
+      )}
+    </>
   );
 }
 
