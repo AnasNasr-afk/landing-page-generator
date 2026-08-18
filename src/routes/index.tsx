@@ -17,11 +17,26 @@ import {
   uid,
 } from "@/lib/builder-types";
 import { newContainer, newElement, seedPage, seedTemplates } from "@/lib/builder-content";
+import {
+  type DragPayload,
+  type DropSlot,
+  isNoOpDrop,
+  moveElement as moveElementTo,
+  putElement,
+  setLocalizedText,
+} from "@/lib/builder-move";
 import { ContainerView, ElementView, LucideIcon, PageRenderer } from "@/components/builder/renderer";
 import { ElementsPanel } from "@/components/builder/elements-panel";
 import { PropertiesPanel } from "@/components/builder/properties-panel";
 import { PageSettingsPanel, SeoPanel } from "@/components/builder/seo-panel";
 import { AssetsScreen, SaveTemplateDialog, TemplatesScreen } from "@/components/builder/templates-screen";
+import { PublishPanel } from "@/components/builder/publish-panel";
+import {
+  type PublishPayload,
+  buildPayload,
+  publishPage,
+  publishedUrl,
+} from "@/lib/publish/payload";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -66,6 +81,18 @@ function BuilderApp() {
   const [preview, setPreview] = useState(false);
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   const [saveTpl, setSaveTpl] = useState(false);
+  const [output, setOutput] = useState<{
+    payload: PublishPayload;
+    published: boolean;
+  } | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [drag, setDrag] = useState<DragPayload | null>(null);
+  const [dropSlot, setDropSlot] = useState<DropSlot | null>(null);
+  /**
+   * The single text node being edited in place, canvas-wide. Owned here rather
+   * than inside each element so only one node can ever be contentEditable.
+   */
+  const [inlineEdit, setInlineEdit] = useState<{ elementId: string; path: string } | null>(null);
 
   const container = useMemo(
     () => page.containers.find((c) => c.id === sel?.containerId),
@@ -126,7 +153,10 @@ function BuilderApp() {
   };
 
   const addElement = (type: ElementType) => {
-    if (!sel || sel.colIndex == null) return;
+    if (!sel || sel.colIndex == null) {
+      toast("Pick a column first", { description: "Or drag the element onto the canvas." });
+      return;
+    }
     const el = newElement(type);
     setContainers((cs) =>
       cs.map((c) =>
@@ -216,6 +246,117 @@ function BuilderApp() {
     setSel(null);
     setNav("build");
     toast.success(`New page started from "${tpl.name}"`);
+  };
+
+  /**
+   * Commits a double-click edit made directly on the canvas.
+   *
+   * Addresses the element by id rather than through `sel`, so editing works
+   * without selecting first, and writes only the current language's half of the
+   * LText at that path.
+   */
+  const editText = (
+    containerId: string,
+    colIndex: number,
+    elementId: string,
+    path: string,
+    value: string,
+  ) =>
+    setContainers((cs) =>
+      cs.map((c) =>
+        c.id !== containerId
+          ? c
+          : {
+              ...c,
+              columns: c.columns.map((col, i) =>
+                i !== colIndex
+                  ? col
+                  : col.map((e) =>
+                      e.id !== elementId
+                        ? e
+                        : { ...e, props: setLocalizedText(e.props, path, lang, value) },
+                    ),
+              ),
+            },
+      ),
+    );
+
+  /* ---------------------------------------------------------------- drag & drop */
+
+  const endDrag = () => {
+    setDrag(null);
+    setDropSlot(null);
+  };
+
+  /** Tracks the insertion slot the pointer is currently over. */
+  const hoverSlot = (slot: DropSlot) => {
+    setDropSlot((prev) =>
+      prev &&
+      prev.containerId === slot.containerId &&
+      prev.colIndex === slot.colIndex &&
+      prev.index === slot.index
+        ? prev
+        : slot,
+    );
+  };
+
+  const completeDrop = () => {
+    if (!drag || !dropSlot) return endDrag();
+
+    if (drag.kind === "new") {
+      const el = newElement(drag.type);
+      setContainers((cs) => putElement(cs, dropSlot, el));
+      setSel({ containerId: dropSlot.containerId, colIndex: dropSlot.colIndex, elementId: el.id });
+      toast.success("Element added");
+    } else if (!isNoOpDrop(page.containers, drag, dropSlot)) {
+      setContainers((cs) => moveElementTo(cs, drag, dropSlot));
+      setSel({
+        containerId: dropSlot.containerId,
+        colIndex: dropSlot.colIndex,
+        elementId: drag.elementId,
+      });
+    }
+
+    endDrag();
+  };
+
+  /**
+   * Picks the insertion index from where the pointer sits relative to an
+   * element's midpoint — above it means before, below means after.
+   */
+  const slotFromPointer = (
+    e: React.DragEvent,
+    containerId: string,
+    colIndex: number,
+    index: number,
+  ) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const after = e.clientY > box.top + box.height / 2;
+    hoverSlot({ containerId, colIndex, index: after ? index + 1 : index });
+  };
+
+  const isSlot = (containerId: string, colIndex: number, index: number) =>
+    dropSlot?.containerId === containerId &&
+    dropSlot.colIndex === colIndex &&
+    dropSlot.index === index;
+
+  /** Builds the payload locally, so generated HTML is inspectable with no backend. */
+  const inspectOutput = () => setOutput({ payload: buildPayload(page), published: false });
+
+  const handlePublish = async () => {
+    setPublishing(true);
+    try {
+      const payload = await publishPage(page);
+      setPage((p) => ({ ...p, status: "published" }));
+      setOutput({ payload, published: true });
+      toast.success("Page published", { description: publishedUrl(payload.slug, lang) });
+    } catch (error) {
+      toast.error("Publish failed — is the mock backend running?", {
+        description: `Run: cd mock-backend && node server.js — ${String(error)}`,
+      });
+    } finally {
+      setPublishing(false);
+    }
   };
 
   const targetLabel = container
@@ -325,13 +466,19 @@ function BuilderApp() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setPage((p) => ({ ...p, status: "published" }));
-                toast.success("Page published", { description: `q84sale.com/${lang}/${page.slug}` });
-              }}
-              className="rounded-lg bg-brand px-4 py-2 text-xs font-semibold text-brand-foreground shadow-brand hover:bg-brand-strong"
+              onClick={inspectOutput}
+              className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-neutral-surface"
+              title="Inspect the HTML this page publishes as"
             >
-              Publish
+              <LucideIcon name="Code2" className="size-3.5" /> HTML
+            </button>
+            <button
+              type="button"
+              onClick={handlePublish}
+              disabled={publishing}
+              className="rounded-lg bg-brand px-4 py-2 text-xs font-semibold text-brand-foreground shadow-brand transition hover:bg-brand-strong disabled:opacity-60"
+            >
+              {publishing ? "Publishing…" : "Publish"}
             </button>
           </div>
         </header>
@@ -344,13 +491,17 @@ function BuilderApp() {
                 onAddElement={addElement}
                 canAddElement={!!container && sel?.colIndex != null}
                 targetLabel={targetLabel}
+                onDragElement={(type) => setDrag({ kind: "new", type })}
+                onDragEnd={endDrag}
               />
             </aside>
 
             <main className="min-w-0 flex-1 overflow-y-auto p-6">
               <div
                 className={cn(
-                  "mx-auto overflow-hidden rounded-2xl bg-background shadow-card transition-all",
+                  // @container makes the element grids below break on THIS
+                  // wrapper's width, so the mobile toggle actually reflows.
+                  "@container mx-auto overflow-hidden rounded-2xl bg-background shadow-card transition-all",
                   device === "mobile" ? "max-w-sm" : "max-w-none",
                 )}
                 dir={lang === "ar" ? "rtl" : "ltr"}
@@ -381,37 +532,118 @@ function BuilderApp() {
                         {(ci) => {
                           const col = c.columns[ci] ?? [];
                           const colActive = active && sel?.colIndex === ci;
+                          const colTargeted =
+                            dropSlot?.containerId === c.id && dropSlot.colIndex === ci;
                           return (
                             <div
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSel({ containerId: c.id, colIndex: ci, elementId: null });
                               }}
+                              // Dropping anywhere in the column that isn't over an
+                              // element appends to the end.
+                              onDragOver={(e) => {
+                                if (!drag) return;
+                                e.preventDefault();
+                                hoverSlot({ containerId: c.id, colIndex: ci, index: col.length });
+                              }}
+                              onDrop={(e) => {
+                                if (!drag) return;
+                                e.preventDefault();
+                                e.stopPropagation();
+                                completeDrop();
+                              }}
                               className={cn(
                                 "min-h-16 space-y-5 rounded-xl border border-dashed p-2 transition",
-                                colActive ? "border-brand bg-brand/5" : "border-transparent hover:border-brand/30",
+                                drag && colTargeted
+                                  ? "border-brand bg-brand/10"
+                                  : drag
+                                    ? "border-brand/40"
+                                    : colActive
+                                      ? "border-brand bg-brand/5"
+                                      : "border-transparent hover:border-brand/30",
                               )}
                             >
                               {col.length === 0 && (
                                 <div className="flex h-16 items-center justify-center text-[11px] text-muted-foreground">
-                                  Empty column — pick an element on the left
+                                  {drag
+                                    ? "Drop here"
+                                    : "Empty column — drag an element in, or select this column"}
                                 </div>
                               )}
-                              {col.map((el) => {
+                              {col.map((el, ei) => {
                                 const elActive = sel?.elementId === el.id;
+                                const dragging =
+                                  drag?.kind === "move" && drag.elementId === el.id;
                                 return (
                                   <div
                                     key={el.id}
+                                    // A draggable ancestor hijacks text selection,
+                                    // so dragging is off while editing in place.
+                                    draggable={inlineEdit?.elementId !== el.id}
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setSel({ containerId: c.id, colIndex: ci, elementId: el.id });
                                     }}
+                                    onDragStart={(e) => {
+                                      // Firefox refuses to start a drag without payload.
+                                      e.dataTransfer.setData("text/plain", el.id);
+                                      e.dataTransfer.effectAllowed = "move";
+                                      setDrag({
+                                        kind: "move",
+                                        containerId: c.id,
+                                        colIndex: ci,
+                                        elementId: el.id,
+                                      });
+                                    }}
+                                    onDragEnd={endDrag}
+                                    onDragOver={(e) => {
+                                      if (!drag) return;
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      slotFromPointer(e, c.id, ci, ei);
+                                    }}
                                     className={cn(
-                                      "relative rounded-lg outline-offset-4 transition",
-                                      elActive ? "outline-2 outline-brand" : "hover:outline-2 hover:outline-brand/30",
+                                      "relative cursor-grab rounded-lg outline-offset-4 transition active:cursor-grabbing",
+                                      dragging && "opacity-40",
+                                      elActive
+                                        ? "outline-2 outline-brand"
+                                        : "hover:outline-2 hover:outline-brand/30",
                                     )}
                                   >
-                                    <ElementView el={el} lang={lang} editing onFire={fireCta} />
+                                    {/* Insertion indicators, absolutely positioned so
+                                        the column doesn't reflow mid-drag. */}
+                                    {isSlot(c.id, ci, ei) && (
+                                      <span className="absolute inset-x-0 -top-3 z-20 h-1 rounded-full bg-brand" />
+                                    )}
+                                    {isSlot(c.id, ci, ei + 1) && (
+                                      <span className="absolute inset-x-0 -bottom-3 z-20 h-1 rounded-full bg-brand" />
+                                    )}
+                                    <span
+                                      className={cn(
+                                        "absolute -start-1 -top-1 z-20 flex size-5 items-center justify-center rounded-md bg-brand text-brand-foreground transition",
+                                        elActive ? "opacity-100" : "opacity-0 hover:opacity-100",
+                                      )}
+                                      title="Drag to reorder"
+                                    >
+                                      <LucideIcon name="GripVertical" className="size-3" />
+                                    </span>
+                                    <ElementView
+                                      el={el}
+                                      lang={lang}
+                                      editing
+                                      onFire={fireCta}
+                                      onEditText={(path, value) =>
+                                        editText(c.id, ci, el.id, path, value)
+                                      }
+                                      editingPath={
+                                        inlineEdit?.elementId === el.id ? inlineEdit.path : null
+                                      }
+                                      onStartEdit={(path) =>
+                                        setInlineEdit({ elementId: el.id, path })
+                                      }
+                                      onStopEdit={() => setInlineEdit(null)}
+                                    />
                                   </div>
                                 );
                               })}
@@ -544,7 +776,7 @@ function BuilderApp() {
           <div className="flex-1 overflow-y-auto bg-neutral-surface p-4">
             <div
               className={cn(
-                "mx-auto overflow-hidden rounded-2xl bg-background shadow-lift",
+                "@container mx-auto overflow-hidden rounded-2xl bg-background shadow-lift",
                 device === "mobile" ? "max-w-sm" : "max-w-none",
               )}
             >
@@ -554,6 +786,14 @@ function BuilderApp() {
             </div>
           </div>
         </div>
+      )}
+
+      {output && (
+        <PublishPanel
+          payload={output.payload}
+          published={output.published}
+          onClose={() => setOutput(null)}
+        />
       )}
 
       <SaveTemplateDialog
@@ -584,7 +824,7 @@ function SiteChrome({ lang }: { lang: Lang }) {
           <div className="flex size-8 items-center justify-center rounded-lg bg-brand text-[11px] font-black text-brand-foreground">
             4S
           </div>
-          <nav className="hidden gap-5 text-sm font-medium text-foreground/70 md:flex">
+          <nav className="hidden gap-5 text-sm font-medium text-foreground/70 @min-[768px]:flex">
             {links.map((l) => (
               <span key={l}>{l}</span>
             ))}

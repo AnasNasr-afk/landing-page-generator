@@ -16,18 +16,25 @@ export function ElementsPanel({
   onAddElement,
   canAddElement,
   targetLabel,
+  onDragElement,
+  onDragEnd,
 }: {
   onAddContainer: (layout: ContainerLayout) => void;
   onAddElement: (type: ElementType) => void;
   canAddElement: boolean;
   targetLabel: string;
+  /** Starts a drag that inserts a new element wherever it is dropped. */
+  onDragElement: (type: ElementType) => void;
+  onDragEnd: () => void;
 }) {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border px-4 py-3">
         <h3 className="text-sm font-semibold">Elements</h3>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {canAddElement ? `Adding into ${targetLabel}` : "Select a column to add elements"}
+          {canAddElement
+            ? `Drag onto the canvas, or click to add to ${targetLabel}`
+            : "Drag an element onto the canvas"}
         </p>
       </div>
 
@@ -69,14 +76,20 @@ export function ElementsPanel({
                 <button
                   key={item.type}
                   type="button"
-                  disabled={!canAddElement}
+                  draggable
+                  onDragStart={(e) => {
+                    // Firefox refuses to start a drag without payload.
+                    e.dataTransfer.setData("text/plain", item.type);
+                    e.dataTransfer.effectAllowed = "copy";
+                    onDragElement(item.type);
+                  }}
+                  onDragEnd={onDragEnd}
                   onClick={() => onAddElement(item.type)}
                   title={item.hint}
                   className={cn(
-                    "flex flex-col items-start gap-2 rounded-xl border border-border bg-background p-3 text-start transition",
-                    canAddElement
-                      ? "hover:border-brand hover:shadow-card"
-                      : "cursor-not-allowed opacity-45",
+                    "flex cursor-grab flex-col items-start gap-2 rounded-xl border border-border bg-background p-3 text-start transition",
+                    "hover:border-brand hover:shadow-card active:cursor-grabbing",
+                    !canAddElement && "opacity-80",
                   )}
                 >
                   <LucideIcon name={item.icon} className="size-4 text-brand" />

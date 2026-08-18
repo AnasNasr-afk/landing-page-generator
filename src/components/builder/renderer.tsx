@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import * as Icons from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -21,6 +21,110 @@ export function LucideIcon({ name, className }: { name: string; className?: stri
   return <C className={className} />;
 }
 
+/**
+ * Props spread onto a text node to make it editable in place.
+ *
+ * `path` is a dotted path into the element's props (`"text"`, `"cta.label"`,
+ * `"items.1.title"`), resolved by `setLocalizedText`.
+ */
+export type EditBind = (
+  path: string,
+  opts?: { multiline?: boolean },
+) => Record<string, unknown>;
+
+const EDIT_STYLE: React.CSSProperties = {
+  outline: "2px solid var(--brand)",
+  outlineOffset: 3,
+  borderRadius: 4,
+  minWidth: "2ch",
+  whiteSpace: "pre-wrap",
+  cursor: "text",
+};
+
+/**
+ * Double-click to edit text directly on the canvas.
+ *
+ * Uses `contentEditable` rather than swapping in an <input>, so the text keeps
+ * its real typography while being edited — what you type is what publishes.
+ * Enter commits, Escape reverts, blur commits. Reads `innerText` (not
+ * `textContent`) so line breaks in a paragraph survive.
+ *
+ * Which node is being edited is owned by the canvas, not by this hook. Held
+ * locally, an element whose blur never fired (a re-render that replaces the
+ * node) stayed editable, and several nodes could be editable at once. A single
+ * lifted value makes that state impossible to reach.
+ */
+function useInlineEdit(
+  editingPath: string | null,
+  onEditText?: ((path: string, value: string) => void) | undefined,
+  onStartEdit?: ((path: string) => void) | undefined,
+  onStopEdit?: (() => void) | undefined,
+): EditBind {
+  const original = useRef("");
+  const cancelled = useRef(false);
+
+  return (path, opts) => {
+    if (!onEditText || !onStartEdit || !onStopEdit) return {};
+
+    if (editingPath !== path) {
+      return {
+        onDoubleClick: (e: React.MouseEvent<HTMLElement>) => {
+          e.stopPropagation();
+          original.current = e.currentTarget.innerText;
+          onStartEdit(path);
+        },
+        title: "Double-click to edit",
+      };
+    }
+
+    const finish = (node: HTMLElement, commit: boolean) => {
+      delete node.dataset["inlineFocus"];
+      onStopEdit();
+      if (!commit) return;
+      // contentEditable substitutes non-breaking spaces; normalise them back.
+      const value = node.innerText.replace(/\u00a0/g, " ").replace(/\n+$/, "");
+      if (value !== original.current) onEditText(path, value);
+    };
+
+    return {
+      contentEditable: true,
+      suppressContentEditableWarning: true,
+      spellCheck: false,
+      draggable: false,
+      style: EDIT_STYLE,
+      // Focus and select once, not on every keystroke — re-focusing would
+      // reset the caret to the start while typing.
+      ref: (node: HTMLElement | null) => {
+        if (!node || node.dataset["inlineFocus"] === "1") return;
+        node.dataset["inlineFocus"] = "1";
+        node.focus();
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      },
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          cancelled.current = true;
+          e.currentTarget.innerText = original.current;
+          e.currentTarget.blur();
+        } else if (e.key === "Enter" && !e.shiftKey && !opts?.multiline) {
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
+      },
+      onBlur: (e: React.FocusEvent<HTMLElement>) => {
+        const commit = !cancelled.current;
+        cancelled.current = false;
+        finish(e.currentTarget, commit);
+      },
+    };
+  };
+}
+
 const alignClass = (a?: string) =>
   a === "center" ? "text-center" : a === "end" ? "text-end" : "text-start";
 const flexAlign = (a?: string) =>
@@ -40,15 +144,41 @@ const WIDTH: Record<Container["contentWidth"], string> = {
   full: "max-w-none",
 };
 
+/**
+ * Breakpoints here are CONTAINER queries (`@min-[768px]:`), not viewport ones
+ * (`md:`).
+ *
+ * The canvas simulates a phone by narrowing its wrapper to ~384px, but a `md:`
+ * utility keys off the browser window, which is still desktop-width — so the
+ * layout stayed two-column inside the phone frame. Container queries measure the
+ * wrapper instead, which is what the device toggle actually changes.
+ *
+ * The pixel values match the published stylesheet's media queries in
+ * `src/lib/publish/styles.ts`, so the canvas and the real page break at the same
+ * widths. Any `@min-[...]` utility added here needs `@container` on an ancestor
+ * (the canvas and preview wrappers in `index.tsx` both set it).
+ */
 const COLS: Record<Container["layout"], string> = {
   "1": "grid-cols-1",
-  "50-50": "grid-cols-1 md:grid-cols-2",
-  "35-65": "grid-cols-1 md:grid-cols-[35fr_65fr]",
-  "65-35": "grid-cols-1 md:grid-cols-[65fr_35fr]",
-  "3": "grid-cols-1 md:grid-cols-3",
+  "50-50": "grid-cols-1 @min-[768px]:grid-cols-2",
+  "35-65": "grid-cols-1 @min-[768px]:grid-cols-[35fr_65fr]",
+  "65-35": "grid-cols-1 @min-[768px]:grid-cols-[65fr_35fr]",
+  "3": "grid-cols-1 @min-[768px]:grid-cols-3",
 };
 
-function CtaButton({ cta, lang, onFire }: { cta: Cta; lang: Lang; onFire?: ((c: Cta) => void) | undefined }) {
+function CtaButton({
+  cta,
+  lang,
+  onFire,
+  bind,
+  labelPath,
+}: {
+  cta: Cta;
+  lang: Lang;
+  onFire?: ((c: Cta) => void) | undefined;
+  bind?: EditBind | undefined;
+  labelPath?: string | undefined;
+}) {
   const base =
     "inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold transition-all active:scale-[0.98]";
   const variants: Record<string, string> = {
@@ -69,13 +199,24 @@ function CtaButton({ cta, lang, onFire }: { cta: Cta; lang: Lang; onFire?: ((c: 
       onClick={() => onFire?.(cta)}
       className={cn(base, variants[cta.variant] ?? variants["primary"])}
     >
-      {t(cta.label, lang)}
+      <span {...(bind && labelPath ? bind(labelPath) : {})}>{t(cta.label, lang)}</span>
       <LucideIcon name={icon[cta.action] ?? "ArrowRight"} className={cn("size-4", cta.action === "internal" && "rtl:rotate-180")} />
     </button>
   );
 }
 
-function LeadForm({ el, lang, onFire }: { el: PageElement; lang: Lang; onFire?: ((c: Cta) => void) | undefined }) {
+function LeadForm({
+  el,
+  lang,
+  onFire,
+  bind,
+}: {
+  el: PageElement;
+  lang: Lang;
+  onFire?: ((c: Cta) => void) | undefined;
+  bind?: EditBind | undefined;
+}) {
+  const edit: EditBind = bind ?? (() => ({}));
   const p = el.props as {
     title: LText;
     anchor: string;
@@ -93,7 +234,9 @@ function LeadForm({ el, lang, onFire }: { el: PageElement; lang: Lang; onFire?: 
       id={p.anchor || "lead-form"}
       className="rounded-2xl border border-border bg-background p-6 shadow-card"
     >
-      <h3 className="text-lg font-semibold">{t(p.title, lang)}</h3>
+      <h3 className="text-lg font-semibold" {...edit("title")}>
+        {t(p.title, lang)}
+      </h3>
       {sent ? (
         <div className="mt-4 rounded-xl bg-brand-soft p-4 text-sm text-brand">
           {t(p.success, lang)}
@@ -103,11 +246,11 @@ function LeadForm({ el, lang, onFire }: { el: PageElement; lang: Lang; onFire?: 
         </div>
       ) : (
         <div className="mt-4 space-y-3">
-          {(p.fields || []).map((f) => (
+          {(p.fields || []).map((f, fi) => (
             <div key={f.id}>
               {f.type !== "checkbox" && (
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                  {t(f.label, lang)}
+                  <span {...edit(`fields.${fi}.label`)}>{t(f.label, lang)}</span>
                   {f.required ? <span className="text-destructive"> *</span> : null}
                 </label>
               )}
@@ -146,7 +289,7 @@ function LeadForm({ el, lang, onFire }: { el: PageElement; lang: Lang; onFire?: 
             }}
             className="w-full rounded-xl bg-brand px-6 py-3 text-sm font-semibold text-brand-foreground shadow-brand hover:bg-brand-strong"
           >
-            {t(p.submitLabel, lang)}
+            <span {...edit("submitLabel")}>{t(p.submitLabel, lang)}</span>
           </button>
         </div>
       )}
@@ -159,34 +302,56 @@ export function ElementView({
   lang,
   editing,
   onFire,
+  onEditText,
+  editingPath = null,
+  onStartEdit,
+  onStopEdit,
 }: {
   el: PageElement;
   lang: Lang;
   editing?: boolean | undefined;
   onFire?: ((c: Cta) => void) | undefined;
+  /** Enables double-click-to-edit on the canvas. Omitted in preview/publish. */
+  onEditText?: ((path: string, value: string) => void) | undefined;
+  /** The prop path being edited on THIS element, owned by the canvas. */
+  editingPath?: string | null | undefined;
+  onStartEdit?: ((path: string) => void) | undefined;
+  onStopEdit?: (() => void) | undefined;
 }) {
   const p = el.props as Record<string, never> as Record<string, unknown>;
   const g = <T,>(k: string) => p[k] as T;
+  const bind = useInlineEdit(editingPath, onEditText, onStartEdit, onStopEdit);
 
   switch (el.type) {
     case "heading": {
       const level = g<string>("level");
       const cls = cn(
         "font-semibold tracking-tight",
-        level === "h1" ? "text-4xl md:text-5xl leading-[1.1]" : level === "h2" ? "text-3xl" : "text-xl",
+        level === "h1" ? "text-4xl @min-[768px]:text-5xl leading-[1.1]" : level === "h2" ? "text-3xl" : "text-xl",
         alignClass(g<string>("align")),
       );
+      // Single-line: Enter commits. Paragraphs pass multiline so Enter breaks.
+      const editable = bind("text");
       return level === "h1" ? (
-        <h1 className={cls}>{t(g<LText>("text"), lang)}</h1>
+        <h1 className={cls} {...editable}>
+          {t(g<LText>("text"), lang)}
+        </h1>
       ) : level === "h3" ? (
-        <h3 className={cls}>{t(g<LText>("text"), lang)}</h3>
+        <h3 className={cls} {...editable}>
+          {t(g<LText>("text"), lang)}
+        </h3>
       ) : (
-        <h2 className={cls}>{t(g<LText>("text"), lang)}</h2>
+        <h2 className={cls} {...editable}>
+          {t(g<LText>("text"), lang)}
+        </h2>
       );
     }
     case "text":
       return (
-        <p className={cn("text-base leading-relaxed opacity-80", alignClass(g<string>("align")))}>
+        <p
+          className={cn("text-base leading-relaxed opacity-80", alignClass(g<string>("align")))}
+          {...bind("text", { multiline: true })}
+        >
           {t(g<LText>("text"), lang)}
         </p>
       );
@@ -224,7 +389,7 @@ export function ElementView({
     case "cards": {
       const items = g<{ icon: string; title: LText; body: LText }[]>("items") || [];
       return (
-        <div className={cn("grid gap-4", items.length >= 3 ? "md:grid-cols-3" : "md:grid-cols-2")}>
+        <div className={cn("grid gap-4", items.length >= 3 ? "@min-[768px]:grid-cols-3" : "@min-[768px]:grid-cols-2")}>
           {items.map((c, i) => (
             <div
               key={i}
@@ -233,8 +398,12 @@ export function ElementView({
               <div className="flex size-11 items-center justify-center rounded-xl bg-brand-soft text-brand">
                 <LucideIcon name={c.icon} className="size-5" />
               </div>
-              <h3 className="mt-4 text-base font-semibold">{t(c.title, lang)}</h3>
-              <p className="mt-1.5 text-sm opacity-70">{t(c.body, lang)}</p>
+              <h3 className="mt-4 text-base font-semibold" {...bind(`items.${i}.title`)}>
+                {t(c.title, lang)}
+              </h3>
+              <p className="mt-1.5 text-sm opacity-70" {...bind(`items.${i}.body`, { multiline: true })}>
+                {t(c.body, lang)}
+              </p>
             </div>
           ))}
         </div>
@@ -247,7 +416,7 @@ export function ElementView({
           {items.map((it, i) => (
             <div key={i} className="flex items-center gap-2 text-sm font-medium">
               <LucideIcon name={it.icon} className="size-4 text-brand" />
-              {t(it.label, lang)}
+              <span {...bind(`items.${i}.label`)}>{t(it.label, lang)}</span>
             </div>
           ))}
         </div>
@@ -256,29 +425,44 @@ export function ElementView({
     case "cta":
       return (
         <div className={cn("flex", flexAlign(g<string>("align")))}>
-          <CtaButton cta={el.props as unknown as Cta} lang={lang} onFire={onFire} />
+          <CtaButton
+            cta={el.props as unknown as Cta}
+            lang={lang}
+            onFire={onFire}
+            bind={bind}
+            labelPath="label"
+          />
         </div>
       );
     case "ctaSection": {
       const cta = g<Cta>("cta");
       return (
         <div className="rounded-3xl bg-brand px-8 py-12 text-center text-brand-foreground shadow-brand">
-          <h2 className="text-3xl font-semibold tracking-tight">{t(g<LText>("title"), lang)}</h2>
-          <p className="mx-auto mt-2 max-w-xl text-sm opacity-85">{t(g<LText>("subtitle"), lang)}</p>
+          <h2 className="text-3xl font-semibold tracking-tight" {...bind("title")}>
+            {t(g<LText>("title"), lang)}
+          </h2>
+          <p
+            className="mx-auto mt-2 max-w-xl text-sm opacity-85"
+            {...bind("subtitle", { multiline: true })}
+          >
+            {t(g<LText>("subtitle"), lang)}
+          </p>
           <div className="mt-6 flex justify-center">
-            <CtaButton cta={cta} lang={lang} onFire={onFire} />
+            <CtaButton cta={cta} lang={lang} onFire={onFire} bind={bind} labelPath="cta.label" />
           </div>
         </div>
       );
     }
     case "form":
-      return <LeadForm el={el} lang={lang} onFire={onFire} />;
+      return <LeadForm el={el} lang={lang} onFire={onFire} bind={bind} />;
     case "listings": {
       const count = Number(g<number>("count") || 4);
       return (
         <div>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-lg font-semibold">{t(g<LText>("title"), lang)}</h3>
+            <h3 className="text-lg font-semibold" {...bind("title")}>
+              {t(g<LText>("title"), lang)}
+            </h3>
             <div className="flex flex-wrap gap-1.5 text-[11px]">
               {[g<string>("category"), g<string>("make"), g<string>("model"), g<string>("area")]
                 .filter(Boolean)
@@ -295,7 +479,7 @@ export function ElementView({
               API-dependent integration — mocked data in prototype
             </div>
           )}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 @min-[640px]:grid-cols-2 @min-[1024px]:grid-cols-4">
             {MOCK_LISTINGS.slice(0, count).map((l) => (
               <div key={l.title} className="overflow-hidden rounded-2xl border border-border bg-background shadow-card">
                 <div className="flex h-28 items-center justify-center bg-neutral-surface text-muted-foreground">
@@ -320,9 +504,11 @@ export function ElementView({
           {items.map((it, i) => (
             <details key={i} className="group p-4" open={i === 0}>
               <summary className="cursor-pointer list-none text-sm font-semibold">
-                {t(it.q, lang)}
+                <span {...bind(`items.${i}.q`)}>{t(it.q, lang)}</span>
               </summary>
-              <p className="mt-2 text-sm opacity-70">{t(it.a, lang)}</p>
+              <p className="mt-2 text-sm opacity-70" {...bind(`items.${i}.a`, { multiline: true })}>
+                {t(it.a, lang)}
+              </p>
             </details>
           ))}
         </div>
@@ -331,14 +517,18 @@ export function ElementView({
     case "steps": {
       const items = g<{ title: LText; body: LText }[]>("items") || [];
       return (
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 @min-[768px]:grid-cols-3">
           {items.map((s, i) => (
             <div key={i} className="rounded-2xl bg-neutral-surface p-6">
               <div className="flex size-9 items-center justify-center rounded-full bg-brand text-sm font-bold text-brand-foreground">
                 {i + 1}
               </div>
-              <h3 className="mt-4 text-base font-semibold">{t(s.title, lang)}</h3>
-              <p className="mt-1 text-sm opacity-70">{t(s.body, lang)}</p>
+              <h3 className="mt-4 text-base font-semibold" {...bind(`items.${i}.title`)}>
+                {t(s.title, lang)}
+              </h3>
+              <p className="mt-1 text-sm opacity-70" {...bind(`items.${i}.body`, { multiline: true })}>
+                {t(s.body, lang)}
+              </p>
             </div>
           ))}
         </div>
