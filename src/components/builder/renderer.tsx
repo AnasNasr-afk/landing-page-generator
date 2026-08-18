@@ -12,8 +12,10 @@ import {
 } from "@/lib/builder-types";
 import { IMAGE_MAP, MOCK_LISTINGS } from "@/lib/builder-content";
 import {
+  DEFAULT_CTA_COLOR,
   TONE_COLOR,
   backgroundStyle,
+  ctaLabelColor,
   hasCustomBg,
   overlayStyle,
   resolveTone,
@@ -200,11 +202,22 @@ function CtaButton({
     app: "Smartphone",
     search: "Search",
   };
+  // `custom` carries its colour as data, so it gets inline styles instead of a
+  // variant class — the label colour follows the button's brightness.
+  const custom = cta.variant === "custom";
+  const customStyle = custom
+    ? {
+        backgroundColor: cta.color || DEFAULT_CTA_COLOR,
+        color: ctaLabelColor(cta),
+      }
+    : undefined;
+
   return (
     <button
       type="button"
       onClick={() => onFire?.(cta)}
-      className={cn(base, variants[cta.variant] ?? variants["primary"])}
+      className={cn(base, !custom && (variants[cta.variant] ?? variants["primary"]))}
+      style={customStyle}
     >
       <span {...(bind && labelPath ? bind(labelPath) : {})}>{t(cta.label, lang)}</span>
       <LucideIcon name={icon[cta.action] ?? "ArrowRight"} className={cn("size-4", cta.action === "internal" && "rtl:rotate-180")} />

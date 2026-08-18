@@ -10,8 +10,10 @@ import {
 } from "@/lib/builder-types";
 import { IMAGE_MAP } from "@/lib/builder-content";
 import {
+  DEFAULT_CTA_COLOR,
   TONE_COLOR,
   backgroundStyle,
+  ctaLabelColor,
   hasCustomBg,
   overlayStyle,
   resolveTone,
@@ -102,7 +104,18 @@ function ctaHtml(cta: Cta, lang: Lang): string {
     CTA_ICON[cta.action],
     cls("fs-lp-ic", cta.action === "internal" && "fs-lp-cta-arrow"),
   );
+  // A custom colour is per-CTA data, so it is inlined rather than living in the
+  // shared stylesheet the way the three fixed variants do.
+  const customStyle =
+    cta.variant === "custom"
+      ? toCssText({
+          backgroundColor: cta.color || DEFAULT_CTA_COLOR,
+          color: ctaLabelColor(cta),
+        })
+      : "";
+
   return `<a class="${cls("fs-lp-cta", `fs-lp-cta-${cta.variant}`)}"${attrs({
+    ...(customStyle ? { style: customStyle } : {}),
     href: ctaHref(cta),
     target: external ? "_blank" : undefined,
     rel: external ? "noopener noreferrer" : undefined,

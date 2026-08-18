@@ -19,7 +19,13 @@ export type Cta = {
   action: CtaAction;
   destination: string;
   event: string;
-  variant: "primary" | "secondary" | "inverse";
+  variant: "primary" | "secondary" | "inverse" | "custom";
+  /** Button colour, used only by the `custom` variant. */
+  color?: string | undefined;
+  /** Label colour for `custom`; `auto` derives it from `color`'s brightness. */
+  textTone?: "auto" | "light" | "dark" | "custom" | undefined;
+  /** Exact label colour, used only when `textTone` is `custom`. */
+  textColor?: string | undefined;
 };
 
 export type FormField = {

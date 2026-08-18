@@ -37,6 +37,35 @@ export function luminance(hex: string): number {
   return 0.2126 * channel(0) + 0.7152 * channel(1) + 0.0722 * channel(2);
 }
 
+/** Default button colour when an editor first switches a CTA to `custom`. */
+export const DEFAULT_CTA_COLOR = "#1d4aff";
+
+/**
+ * Readable label colour for a custom-coloured button.
+ *
+ * Same rule as container backgrounds, so a dark button gets light text without
+ * the editor having to think about it.
+ */
+type CtaColors = {
+  color?: string | undefined;
+  textTone?: "auto" | "light" | "dark" | "custom" | undefined;
+  textColor?: string | undefined;
+};
+
+export function resolveCtaTone(cta: CtaColors): "light" | "dark" {
+  if (cta.textTone === "light" || cta.textTone === "dark") return cta.textTone;
+  return luminance(cta.color || DEFAULT_CTA_COLOR) < 0.45 ? "light" : "dark";
+}
+
+/** Default label colour when an editor first picks a custom label colour. */
+export const DEFAULT_CTA_TEXT_COLOR = "#ffffff";
+
+/** The actual colour a custom button's label is painted. */
+export function ctaLabelColor(cta: CtaColors): string {
+  if (cta.textTone === "custom") return cta.textColor || DEFAULT_CTA_TEXT_COLOR;
+  return TONE_COLOR[resolveCtaTone(cta)];
+}
+
 export function resolveTone(c: Container): "light" | "dark" {
   if (c.textTone && c.textTone !== "auto") return c.textTone;
   if (!c.bg) return PRESET_TONE[c.background];

@@ -22,6 +22,7 @@ import {
   TextInput,
   Toggle,
 } from "./controls";
+import { DEFAULT_CTA_COLOR, DEFAULT_CTA_TEXT_COLOR } from "@/lib/container-bg";
 import { LucideIcon } from "./renderer";
 
 function LInput({
@@ -102,14 +103,76 @@ function CtaEditor({
       <Field label="Style">
         <Segmented
           value={cta.variant}
-          onChange={(v) => set({ variant: v as Cta["variant"] })}
+          onChange={(v) =>
+            set(
+              v === "custom"
+                ? { variant: v, color: cta.color || DEFAULT_CTA_COLOR, textTone: "auto" }
+                : { variant: v as Cta["variant"] },
+            )
+          }
           options={[
             { value: "primary", label: "Primary" },
             { value: "secondary", label: "Soft" },
             { value: "inverse", label: "On blue" },
+            { value: "custom", label: "Custom" },
           ]}
         />
       </Field>
+      {cta.variant === "custom" && (
+        <>
+          <Field label="Button color">
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={cta.color || DEFAULT_CTA_COLOR}
+                onChange={(e) => set({ color: e.target.value })}
+                className="size-9 shrink-0 cursor-pointer rounded-lg border border-border bg-background"
+              />
+              <TextInput
+                value={cta.color || DEFAULT_CTA_COLOR}
+                onChange={(e) => set({ color: e.target.value })}
+                placeholder={DEFAULT_CTA_COLOR}
+              />
+            </div>
+          </Field>
+          <Field label="Label color">
+            <Segmented
+              value={cta.textTone ?? "auto"}
+              onChange={(v) =>
+                set(
+                  v === "custom"
+                    ? {
+                        textTone: "custom",
+                        textColor: cta.textColor || DEFAULT_CTA_TEXT_COLOR,
+                      }
+                    : { textTone: v as Cta["textTone"] },
+                )
+              }
+              options={[
+                { value: "auto", label: "Auto" },
+                { value: "light", label: "Light" },
+                { value: "dark", label: "Dark" },
+                { value: "custom", label: "Custom" },
+              ]}
+            />
+          </Field>
+          {cta.textTone === "custom" && (
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={cta.textColor || DEFAULT_CTA_TEXT_COLOR}
+                onChange={(e) => set({ textColor: e.target.value })}
+                className="size-9 shrink-0 cursor-pointer rounded-lg border border-border bg-background"
+              />
+              <TextInput
+                value={cta.textColor || DEFAULT_CTA_TEXT_COLOR}
+                onChange={(e) => set({ textColor: e.target.value })}
+                placeholder={DEFAULT_CTA_TEXT_COLOR}
+              />
+            </div>
+          )}
+        </>
+      )}
     </>
   );
 }
