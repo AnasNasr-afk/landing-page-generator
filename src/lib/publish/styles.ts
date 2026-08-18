@@ -9,8 +9,9 @@
  *    the host's own chrome.
  * 2. No `@import`, no web fonts, no external URLs. The fragment is injected into
  *    someone else's document, so it cannot add requests or `<link>` tags. The
- *    font stack names Plus Jakarta Sans / IBM Plex Sans Arabic so it matches the
- *    builder when the host happens to have them, and degrades to system-ui.
+ *    font stack names SS Sakr Soft — 4Sale's brand face, which q84sale.com
+ *    already serves — so a published page matches the surrounding site, and
+ *    degrades to system-ui anywhere it is missing.
  * 3. Logical properties only (`padding-inline`, `margin-block-start`, `start`/
  *    `end` for text-align). Arabic pages render with dir="rtl" on `.fs-lp`, and
  *    logical properties mirror themselves.
@@ -20,6 +21,30 @@
 
 const CARD_SHADOW = "0 1px 2px rgba(11,17,32,.05), 0 8px 24px -12px rgba(11,17,32,.12)";
 const BRAND_SHADOW = "0 8px 20px -8px rgba(29,74,255,.55)";
+
+/**
+ * `@font-face` rules for the brand typeface, prepended to the published CSS.
+ *
+ * Only 400/500/700 ship. They cover everything the builder renders — 600
+ * resolves up to 700 — and each file is ~78KB, so shipping all five weights
+ * would cost a visitor 150KB of fonts they never see.
+ *
+ * See FONT_BASE in ./config for why the fragment declares the font at all
+ * rather than reusing the host's.
+ */
+export function fontFaceCss(base: string): string {
+  if (!base) return "";
+  const root = base.replace(/\/$/, "");
+  const face = (file: string, weight: number) =>
+    `@font-face{font-family:"SS Sakr Soft";` +
+    `src:url("${root}/${file}") format("woff2");` +
+    `font-weight:${weight};font-style:normal;font-display:swap}`;
+  return (
+    face("SSSakrSoft-Regular.woff2", 400) +
+    face("SSSakrSoft-Medium.woff2", 500) +
+    face("SSSakrSoft-Bold.woff2", 700)
+  );
+}
 
 export const PUBLISH_CSS = `
 /* ---------- root & reset ---------- */
@@ -36,7 +61,7 @@ export const PUBLISH_CSS = `
   --fs-danger:#e5484d;
   background:var(--fs-bg);
   color:var(--fs-fg);
-  font-family:"Plus Jakarta Sans","IBM Plex Sans Arabic",system-ui,-apple-system,"Segoe UI",Tahoma,Arial,sans-serif;
+  font-family:"SS Sakr Soft",system-ui,-apple-system,"Segoe UI",Tahoma,Arial,sans-serif;
   font-size:16px;
   line-height:1.5;
   -webkit-font-smoothing:antialiased;
