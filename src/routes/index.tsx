@@ -33,12 +33,28 @@ import {
   putElement,
   setLocalizedText,
 } from "@/lib/builder-move";
-import { ContainerView, ElementView, LucideIcon, PageRenderer } from "@/components/builder/renderer";
+import {
+  ContainerView,
+  ElementView,
+  LucideIcon,
+  PageRenderer,
+} from "@/components/builder/renderer";
 import { ElementsPanel } from "@/components/builder/elements-panel";
 import { PropertiesPanel } from "@/components/builder/properties-panel";
 import { PageSettingsPanel, SeoPanel } from "@/components/builder/seo-panel";
-import { AssetsScreen, SaveTemplateDialog, TemplatesScreen } from "@/components/builder/templates-screen";
+import {
+  AssetsScreen,
+  SaveTemplateDialog,
+  TemplatesScreen,
+} from "@/components/builder/templates-screen";
+import { PagesScreen } from "@/components/builder/pages-screen";
 import { PublishPanel } from "@/components/builder/publish-panel";
+import {
+  deletePage as deletePageRequest,
+  fetchPageForEditing,
+  fetchPages,
+  type PageSummary,
+} from "@/lib/page-api";
 import {
   type PublishPayload,
   buildPayload,
@@ -70,11 +86,12 @@ export const Route = createFileRoute("/")({
   component: BuilderApp,
 });
 
-type Nav = "build" | "templates" | "seo" | "assets";
+type Nav = "build" | "pages" | "templates" | "seo" | "assets";
 type Selection = { containerId: string; colIndex: number | null; elementId: string | null } | null;
 
 const NAV: { key: Nav; icon: string; label: string }[] = [
   { key: "build", icon: "LayoutPanelTop", label: "Build" },
+  { key: "pages", icon: "Files", label: "Pages" },
   { key: "templates", icon: "LayoutTemplate", label: "Templates" },
   { key: "seo", icon: "Search", label: "SEO" },
   { key: "assets", icon: "Images", label: "Assets" },
@@ -83,6 +100,7 @@ const NAV: { key: Nav; icon: string; label: string }[] = [
 function BuilderApp() {
   const [page, setPage] = useState<LandingPage>(seedPage);
   const [templates, setTemplates] = useState<Template[]>(seedTemplates);
+  const [pages, setPages] = useState<PageSummary[]>([]);
   const [nav, setNav] = useState<Nav>("build");
   const [lang, setLang] = useState<Lang>("en");
   const [sel, setSel] = useState<Selection>(null);
@@ -96,6 +114,9 @@ function BuilderApp() {
   } | null>(null);
   const [savingTpl, setSavingTpl] = useState(false);
   const [templatesLoading, setTemplatesLoading] = useState(true);
+  const [pagesLoading, setPagesLoading] = useState(true);
+  const [openingPage, setOpeningPage] = useState<string | null>(null);
+  const [deletingPage, setDeletingPage] = useState<string | null>(null);
   const [output, setOutput] = useState<{
     payload: PublishPayload;
     published: boolean;
@@ -146,6 +167,29 @@ function BuilderApp() {
       })
       .finally(() => {
         if (!cancelled) setTemplatesLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchPages()
+      .then((saved) => {
+        if (!cancelled) setPages(saved);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toast.error("Couldn't load published pages", {
+          description:
+            error instanceof Error ? error.message : "The publishing API is unreachable.",
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setPagesLoading(false);
       });
 
     return () => {
@@ -210,7 +254,9 @@ function BuilderApp() {
               columns: c.columns.map((col, i) =>
                 i !== sel?.colIndex
                   ? col
-                  : col.map((e) => (e.id === sel.elementId ? { ...e, props: { ...e.props, ...patch } } : e)),
+                  : col.map((e) =>
+                      e.id === sel.elementId ? { ...e, props: { ...e.props, ...patch } } : e,
+                    ),
               ),
             },
       ),
@@ -557,11 +603,51 @@ function BuilderApp() {
   /** Builds the payload locally, so generated HTML is inspectable with no backend. */
   const inspectOutput = () => setOutput({ payload: buildPayload(page), published: false });
 
+  const openPublishedPage = async (summary: PageSummary) => {
+    setOpeningPage(summary.slug);
+    try {
+      const source = await fetchPageForEditing(summary.slug);
+      setPage(source);
+      setLang(source.languages[0] ?? "en");
+      setSel(null);
+      setOutput(null);
+      setNav("build");
+      toast.success(`Opened "${source.name || source.slug}" for editing`);
+    } catch (error) {
+      toast.error("Couldn't open page", {
+        description: error instanceof Error ? error.message : "The publishing API is unreachable.",
+      });
+    } finally {
+      setOpeningPage(null);
+    }
+  };
+
+  const removePublishedPage = async (summary: PageSummary) => {
+    if (!window.confirm(`Delete "${summary.name || summary.slug}"? This cannot be undone.`)) return;
+
+    setDeletingPage(summary.slug);
+    try {
+      await deletePageRequest(summary.slug);
+      setPages((current) => current.filter((page) => page.slug !== summary.slug));
+      if (page.slug === summary.slug) setPage((current) => ({ ...current, status: "draft" }));
+      toast.success("Page deleted", { description: `/${summary.slug}` });
+    } catch (error) {
+      toast.error("Couldn't delete page", {
+        description: error instanceof Error ? error.message : "The publishing API is unreachable.",
+      });
+    } finally {
+      setDeletingPage(null);
+    }
+  };
+
   const handlePublish = async () => {
     setPublishing(true);
     try {
       const payload = await publishPage(page);
       setPage((p) => ({ ...p, status: "published" }));
+      fetchPages()
+        .then(setPages)
+        .catch(() => undefined);
       setOutput({ payload, published: true });
       toast.success("Page published", { description: publishedUrl(payload.slug, lang) });
     } catch (error) {
@@ -573,9 +659,7 @@ function BuilderApp() {
     }
   };
 
-  const targetLabel = container
-    ? `${container.name} · column ${(sel?.colIndex ?? 0) + 1}`
-    : "";
+  const targetLabel = container ? `${container.name} · column ${(sel?.colIndex ?? 0) + 1}` : "";
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-neutral-surface text-foreground">
@@ -593,7 +677,9 @@ function BuilderApp() {
             onClick={() => setNav(n.key)}
             className={cn(
               "flex w-14 flex-col items-center gap-1 rounded-xl py-2 text-[10px] font-medium transition",
-              nav === n.key ? "bg-brand-soft text-brand" : "text-muted-foreground hover:bg-neutral-surface",
+              nav === n.key
+                ? "bg-brand-soft text-brand"
+                : "text-muted-foreground hover:bg-neutral-surface",
             )}
           >
             <LucideIcon name={n.icon} className="size-4" />
@@ -650,10 +736,15 @@ function BuilderApp() {
                   onClick={() => setDevice(d)}
                   className={cn(
                     "rounded-md px-2.5 py-1.5 transition",
-                    device === d ? "bg-background text-brand shadow-panel" : "text-muted-foreground",
+                    device === d
+                      ? "bg-background text-brand shadow-panel"
+                      : "text-muted-foreground",
                   )}
                 >
-                  <LucideIcon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
+                  <LucideIcon
+                    name={d === "desktop" ? "Monitor" : "Smartphone"}
+                    className="size-3.5"
+                  />
                 </button>
               ))}
             </div>
@@ -697,7 +788,32 @@ function BuilderApp() {
           </div>
         </header>
 
-        {nav === "build" ? (
+        {nav === "pages" ? (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <PagesScreen
+              pages={pages}
+              loading={pagesLoading}
+              opening={openingPage}
+              deleting={deletingPage}
+              onOpen={openPublishedPage}
+              onDelete={removePublishedPage}
+              onRefresh={() => {
+                setPagesLoading(true);
+                fetchPages()
+                  .then(setPages)
+                  .catch((error: unknown) =>
+                    toast.error("Couldn't refresh pages", {
+                      description:
+                        error instanceof Error
+                          ? error.message
+                          : "The publishing API is unreachable.",
+                    }),
+                  )
+                  .finally(() => setPagesLoading(false));
+              }}
+            />
+          </div>
+        ) : nav === "build" ? (
           <div className="flex min-h-0 flex-1">
             <aside className="w-72 shrink-0 overflow-hidden border-e border-border bg-background">
               <ElementsPanel
@@ -978,7 +1094,10 @@ function BuilderApp() {
         <div className="fixed inset-0 z-50 flex flex-col bg-neutral-900/60">
           <div className="flex h-14 items-center justify-between bg-background px-4">
             <div className="text-sm font-semibold">
-              Preview · <span className="font-normal text-muted-foreground">q84sale.com/{lang}/{page.slug}</span>
+              Preview ·{" "}
+              <span className="font-normal text-muted-foreground">
+                q84sale.com/{lang}/{page.slug}
+              </span>
             </div>
             <div className="flex items-center gap-2">
               <div className="flex rounded-lg bg-neutral-surface p-1">
@@ -989,7 +1108,9 @@ function BuilderApp() {
                     onClick={() => setLang(l)}
                     className={cn(
                       "rounded-md px-3 py-1 text-xs font-semibold uppercase",
-                      lang === l ? "bg-background text-brand shadow-panel" : "text-muted-foreground",
+                      lang === l
+                        ? "bg-background text-brand shadow-panel"
+                        : "text-muted-foreground",
                     )}
                   >
                     {l}
@@ -1004,10 +1125,15 @@ function BuilderApp() {
                     onClick={() => setDevice(d)}
                     className={cn(
                       "rounded-md px-2.5 py-1.5",
-                      device === d ? "bg-background text-brand shadow-panel" : "text-muted-foreground",
+                      device === d
+                        ? "bg-background text-brand shadow-panel"
+                        : "text-muted-foreground",
                     )}
                   >
-                    <LucideIcon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
+                    <LucideIcon
+                      name={d === "desktop" ? "Monitor" : "Smartphone"}
+                      className="size-3.5"
+                    />
                   </button>
                 ))}
               </div>
@@ -1072,7 +1198,9 @@ function SiteChrome({ lang }: { lang: Lang }) {
           </nav>
         </div>
         <div className="flex items-center gap-2 text-xs font-semibold">
-          <span className="rounded-lg border border-border px-3 py-1.5">{lang === "ar" ? "English" : "العربية"}</span>
+          <span className="rounded-lg border border-border px-3 py-1.5">
+            {lang === "ar" ? "English" : "العربية"}
+          </span>
           <span className="rounded-lg bg-brand px-3 py-1.5 text-brand-foreground">
             {lang === "ar" ? "أضف إعلانك" : "Post an ad"}
           </span>
@@ -1084,7 +1212,10 @@ function SiteChrome({ lang }: { lang: Lang }) {
 
 function SiteFooter({ lang }: { lang: Lang }) {
   return (
-    <footer dir={lang === "ar" ? "rtl" : "ltr"} className="border-t border-border bg-neutral-surface">
+    <footer
+      dir={lang === "ar" ? "rtl" : "ltr"}
+      className="border-t border-border bg-neutral-surface"
+    >
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-6 text-xs text-muted-foreground">
         <span>© {new Date().getFullYear()} 4Sale — q84sale.com</span>
         <span>{t({ en: "Terms · Privacy · Help", ar: "الشروط · الخصوصية · المساعدة" }, lang)}</span>

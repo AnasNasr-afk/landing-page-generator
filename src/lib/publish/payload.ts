@@ -34,6 +34,8 @@ export type PublishPayload = {
   slug: string;
   name: string;
   status: "published";
+  /** The source tree used to reopen this page in the builder. */
+  source: LandingPage;
   /** One stylesheet shared by every locale. */
   css: string;
   locales: Partial<Record<Lang, PublishedLocale>>;
@@ -67,6 +69,7 @@ export function buildPayload(page: LandingPage): PublishPayload {
     slug: page.seo.slug || page.slug,
     name: page.name,
     status: "published",
+    source: { ...page, status: "published" },
     css: fontFaceCss(FONT_BASE) + PUBLISH_CSS,
     locales,
   };
