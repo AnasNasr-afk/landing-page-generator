@@ -1,8 +1,8 @@
 import { type Lang, type LandingPage, t } from "@/lib/builder-types";
-import { FORM_ACTION, PUBLISH_API, assetOrigin } from "./config";
+import { FONT_BASE, FORM_ACTION, PUBLISH_API, assetOrigin } from "./config";
 import { esc } from "./html";
 import { serializePage } from "./serialize";
-import { PUBLISH_CSS } from "./styles";
+import { PUBLISH_CSS, fontFaceCss } from "./styles";
 
 /**
  * The publish payload — what gets stored, and what the website fetches.
@@ -67,7 +67,7 @@ export function buildPayload(page: LandingPage): PublishPayload {
     slug: page.seo.slug || page.slug,
     name: page.name,
     status: "published",
-    css: PUBLISH_CSS,
+    css: fontFaceCss(FONT_BASE) + PUBLISH_CSS,
     locales,
   };
 }
