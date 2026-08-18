@@ -11,6 +11,13 @@ import {
   t,
 } from "@/lib/builder-types";
 import { IMAGE_MAP, MOCK_LISTINGS } from "@/lib/builder-content";
+import {
+  TONE_COLOR,
+  backgroundStyle,
+  hasCustomBg,
+  overlayStyle,
+  resolveTone,
+} from "@/lib/container-bg";
 
 export function LucideIcon({ name, className }: { name: string; className?: string | undefined }) {
   const Cmp = (
@@ -555,16 +562,34 @@ export function ContainerView({
   className?: string | undefined;
 }) {
   void lang;
+  const custom = hasCustomBg(container);
+  const scrim = overlayStyle(container);
   return (
     <section
-      className={cn(BG[container.background], className)}
+      // A custom background replaces the preset class entirely, including the
+      // text colour `bg-brand` bakes in — tone is resolved explicitly instead.
+      className={cn(!custom && BG[container.background], className)}
       style={{
         paddingTop: container.paddingY,
         paddingBottom: container.paddingY,
         borderRadius: container.radius,
+        ...(custom
+          ? {
+              ...backgroundStyle(container),
+              color: TONE_COLOR[resolveTone(container)],
+              position: "relative",
+              // Keeps the image and scrim inside a rounded corner.
+              overflow: "hidden",
+            }
+          : {}),
       }}
     >
-      <div className={cn("mx-auto px-6", WIDTH[container.contentWidth])}>
+      {scrim ? <div style={scrim} /> : null}
+      <div
+        className={cn("mx-auto px-6", WIDTH[container.contentWidth])}
+        // Lifts content above the scrim.
+        style={custom ? { position: "relative" } : undefined}
+      >
         <div
           className={cn(
             "grid items-start",
