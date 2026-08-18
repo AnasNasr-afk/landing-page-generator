@@ -5,6 +5,54 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
+ * SS Sakr Soft — 4Sale's brand typeface.
+ *
+ * Covers Latin and Arabic in one family, so English and Arabic pages share a
+ * single font rather than switching between two.
+ *
+ * The family ships light/Regular/Medium/Bold/Heavy and has no 600. CSS weight
+ * matching resolves 600 upward to Bold, so `font-semibold` — which the builder
+ * uses on most headings — renders as Bold.
+ *
+ * `swap` keeps text visible while the font loads instead of blanking it.
+ */
+@font-face {
+  font-family: "SS Sakr Soft";
+  src: url("/fonts/SSSakrSoft-light.woff2") format("woff2");
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "SS Sakr Soft";
+  src: url("/fonts/SSSakrSoft-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "SS Sakr Soft";
+  src: url("/fonts/SSSakrSoft-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "SS Sakr Soft";
+  src: url("/fonts/SSSakrSoft-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "SS Sakr Soft";
+  src: url("/fonts/SSSakrSoft-Heavy.woff2") format("woff2");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
  * Design system definition.
  *
  * The @theme inline block maps CSS custom properties to Tailwind utility
@@ -19,7 +67,7 @@
  */
 
 @theme inline {
-  --font-sans: "Plus Jakarta Sans", "IBM Plex Sans Arabic", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "SS Sakr Soft", ui-sans-serif, system-ui, sans-serif;
   --color-brand: var(--brand);
   --color-brand-strong: var(--brand-strong);
   --color-brand-foreground: var(--brand-foreground);
