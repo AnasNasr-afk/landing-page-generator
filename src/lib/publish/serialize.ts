@@ -16,6 +16,7 @@ import {
   ctaLabelColor,
   hasCustomBg,
   overlayStyle,
+  resolveTextColor,
   resolveTone,
   toCssText,
 } from "@/lib/container-bg";
@@ -136,15 +137,20 @@ function serializeElement(el: PageElement, o: SerializeOptions): string {
     case "heading": {
       const level = str(p["level"], "h2");
       const tag = level === "h1" ? "h1" : level === "h3" ? "h3" : "h2";
-      return `<${tag} class="${cls(`fs-lp-${tag}`, alignCls(p["align"]))}">${escLines(
-        ltext(p["text"], lang),
-      )}</${tag}>`;
+      const color = resolveTextColor(p["tone"], p["color"]);
+      return `<${tag} class="${cls(`fs-lp-${tag}`, alignCls(p["align"]))}"${
+        color ? ` style="color:${esc(color)}"` : ""
+      }>${escLines(ltext(p["text"], lang))}</${tag}>`;
     }
 
-    case "text":
-      return `<p class="${cls("fs-lp-p", alignCls(p["align"]))}">${escLines(
-        ltext(p["text"], lang),
-      )}</p>`;
+    case "text": {
+      // `.fs-lp-p` softens body copy to 80% opacity; an explicitly chosen colour
+      // overrides that so it renders exactly as picked. Matches the canvas.
+      const color = resolveTextColor(p["tone"], p["color"]);
+      return `<p class="${cls("fs-lp-p", alignCls(p["align"]))}"${
+        color ? ` style="color:${esc(color)};opacity:1"` : ""
+      }>${escLines(ltext(p["text"], lang))}</p>`;
+    }
 
     case "image": {
       // Seeded content stores sentinels ("__hero__") that map to bundled

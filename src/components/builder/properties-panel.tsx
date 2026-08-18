@@ -22,7 +22,11 @@ import {
   TextInput,
   Toggle,
 } from "./controls";
-import { DEFAULT_CTA_COLOR, DEFAULT_CTA_TEXT_COLOR } from "@/lib/container-bg";
+import {
+  DEFAULT_CTA_COLOR,
+  DEFAULT_CTA_TEXT_COLOR,
+  DEFAULT_TEXT_COLOR,
+} from "@/lib/container-bg";
 import { LucideIcon } from "./renderer";
 
 function LInput({
@@ -46,6 +50,56 @@ function LInput({
         onChange({ ...v, [lang]: e.target.value })
       }
     />
+  );
+}
+
+/**
+ * Text colour picker shared by headings and paragraphs.
+ *
+ * `Auto` writes no colour at all, letting the container's own text colour
+ * through — so copy stays readable when the background changes later.
+ */
+function TextColorField({
+  tone,
+  color,
+  update,
+}: {
+  tone: string | undefined;
+  color: string | undefined;
+  update: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <>
+      <Field label="Text color">
+        <Segmented
+          value={tone ?? "auto"}
+          onChange={(v) =>
+            update(v === "custom" ? { tone: v, color: color || DEFAULT_TEXT_COLOR } : { tone: v })
+          }
+          options={[
+            { value: "auto", label: "Auto" },
+            { value: "light", label: "Light" },
+            { value: "dark", label: "Dark" },
+            { value: "custom", label: "Custom" },
+          ]}
+        />
+      </Field>
+      {tone === "custom" && (
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            value={color || DEFAULT_TEXT_COLOR}
+            onChange={(e) => update({ color: e.target.value })}
+            className="size-9 shrink-0 cursor-pointer rounded-lg border border-border bg-background"
+          />
+          <TextInput
+            value={color || DEFAULT_TEXT_COLOR}
+            onChange={(e) => update({ color: e.target.value })}
+            placeholder={DEFAULT_TEXT_COLOR}
+          />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -210,6 +264,7 @@ function ElementEditor({
           <Field label="Alignment">
             <Segmented value={g<Align>("align")} onChange={(v) => update({ align: v })} options={alignOptions} />
           </Field>
+          <TextColorField tone={g<string>("tone")} color={g<string>("color")} update={update} />
         </>
       );
     case "text":
@@ -221,6 +276,7 @@ function ElementEditor({
           <Field label="Alignment">
             <Segmented value={g<Align>("align")} onChange={(v) => update({ align: v })} options={alignOptions} />
           </Field>
+          <TextColorField tone={g<string>("tone")} color={g<string>("color")} update={update} />
         </>
       );
     case "image":
