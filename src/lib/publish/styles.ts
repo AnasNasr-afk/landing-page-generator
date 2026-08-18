@@ -130,6 +130,10 @@ export const PUBLISH_CSS = `
 .fs-lp-cta-secondary:hover{background:#e4e9ff}
 .fs-lp-cta-inverse{background:var(--fs-bg);color:var(--fs-brand)}
 .fs-lp-cta-inverse:hover{background:#f2f4ff}
+/* Colour comes inline per button, so hover darkens whatever it happens to be
+   rather than naming a second colour the stylesheet cannot know. */
+.fs-lp-cta-custom{border-color:transparent}
+.fs-lp-cta-custom:hover{filter:brightness(.92)}
 
 /* ---------- CTA banner ---------- */
 .fs-lp-ctasec{
