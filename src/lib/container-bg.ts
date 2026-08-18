@@ -20,6 +20,9 @@ const PRESET_TONE: Record<Container["background"], "light" | "dark"> = {
 
 export const TONE_COLOR = { light: "#ffffff", dark: "#020618" } as const;
 
+/** Starting point when an editor first picks a custom text colour. */
+export const DEFAULT_TEXT_COLOR = "#020618";
+
 /** WCAG relative luminance, used to pick readable text over a custom colour. */
 export function luminance(hex: string): number {
   const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
@@ -59,6 +62,22 @@ export function resolveCtaTone(cta: CtaColors): "light" | "dark" {
 
 /** Default label colour when an editor first picks a custom label colour. */
 export const DEFAULT_CTA_TEXT_COLOR = "#ffffff";
+
+/**
+ * Colour for a heading or paragraph, or `undefined` to inherit.
+ *
+ * `auto` deliberately sets nothing: the container already paints a colour that
+ * is readable against its own background, so inheriting is both the safe
+ * default and the one that keeps working when the background changes later.
+ */
+export function resolveTextColor(
+  tone: unknown,
+  color: unknown,
+): string | undefined {
+  if (tone === "light" || tone === "dark") return TONE_COLOR[tone];
+  if (tone === "custom") return typeof color === "string" && color ? color : undefined;
+  return undefined;
+}
 
 /** The actual colour a custom button's label is painted. */
 export function ctaLabelColor(cta: CtaColors): string {

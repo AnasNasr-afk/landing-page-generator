@@ -18,6 +18,7 @@ import {
   ctaLabelColor,
   hasCustomBg,
   overlayStyle,
+  resolveTextColor,
   resolveTone,
 } from "@/lib/container-bg";
 
@@ -352,29 +353,40 @@ export function ElementView({
       );
       // Single-line: Enter commits. Paragraphs pass multiline so Enter breaks.
       const editable = bind("text");
+      const color = resolveTextColor(g<string>("tone"), g<string>("color"));
+      const style = color ? { color } : undefined;
       return level === "h1" ? (
-        <h1 className={cls} {...editable}>
+        <h1 className={cls} style={style} {...editable}>
           {t(g<LText>("text"), lang)}
         </h1>
       ) : level === "h3" ? (
-        <h3 className={cls} {...editable}>
+        <h3 className={cls} style={style} {...editable}>
           {t(g<LText>("text"), lang)}
         </h3>
       ) : (
-        <h2 className={cls} {...editable}>
+        <h2 className={cls} style={style} {...editable}>
           {t(g<LText>("text"), lang)}
         </h2>
       );
     }
-    case "text":
+    case "text": {
+      // Body copy is normally softened to 80% opacity. An explicitly chosen
+      // colour should render exactly as picked, so the softening is dropped.
+      const color = resolveTextColor(g<string>("tone"), g<string>("color"));
       return (
         <p
-          className={cn("text-base leading-relaxed opacity-80", alignClass(g<string>("align")))}
+          className={cn(
+            "text-base leading-relaxed",
+            !color && "opacity-80",
+            alignClass(g<string>("align")),
+          )}
+          style={color ? { color } : undefined}
           {...bind("text", { multiline: true })}
         >
           {t(g<LText>("text"), lang)}
         </p>
       );
+    }
     case "image": {
       const src = g<string>("src");
       const resolved = IMAGE_MAP[src] || src;
