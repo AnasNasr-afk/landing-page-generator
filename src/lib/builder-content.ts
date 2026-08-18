@@ -356,6 +356,7 @@ export const seedTemplates = (): Template[] => [
     description: "Hero, benefits, how it works, lead form and closing CTA. Built from the Business Profile page.",
     category: "Lead generation",
     containers: businessProfileContainers(),
+    kind: "page",
     system: true,
   },
   {
@@ -363,6 +364,7 @@ export const seedTemplates = (): Template[] => [
     name: "Campaign Promo",
     description: "Short promotional page: bold hero, three value cards and a full-width CTA banner.",
     category: "Campaign",
+    kind: "page",
     system: true,
     containers: [
       {
@@ -395,6 +397,7 @@ export const seedTemplates = (): Template[] => [
     name: "Category SEO Page",
     description: "SEO landing structure: intro copy, live listings block, FAQ and app deep-link CTA.",
     category: "SEO",
+    kind: "page",
     system: true,
     containers: [
       {

@@ -592,6 +592,7 @@ export function PropertiesPanel({
   onDeleteElement,
   onMoveElement,
   onDuplicateContainer,
+  onSaveContainerAsBlock,
   onDeleteContainer,
   onMoveContainer,
 }: {
@@ -603,6 +604,8 @@ export function PropertiesPanel({
   onDeleteElement: () => void;
   onMoveElement: (dir: -1 | 1) => void;
   onDuplicateContainer: () => void;
+  /** Saves this container to the shared library as a reusable block. */
+  onSaveContainerAsBlock: () => void;
   onDeleteContainer: () => void;
   onMoveContainer: (dir: -1 | 1) => void;
 }) {
@@ -641,8 +644,9 @@ export function PropertiesPanel({
               <>
                 <IconBtn icon="ArrowUp" onClick={() => onMoveContainer(-1)} />
                 <IconBtn icon="ArrowDown" onClick={() => onMoveContainer(1)} />
-                <IconBtn icon="Copy" onClick={onDuplicateContainer} />
-                <IconBtn icon="Trash2" danger onClick={onDeleteContainer} />
+                <IconBtn icon="Copy" title="Duplicate" onClick={onDuplicateContainer} />
+                <IconBtn icon="BookmarkPlus" title="Save as block" onClick={onSaveContainerAsBlock} />
+                <IconBtn icon="Trash2" title="Delete" danger onClick={onDeleteContainer} />
               </>
             )}
           </div>
@@ -882,14 +886,17 @@ function IconBtn({
   icon,
   onClick,
   danger,
+  title,
 }: {
   icon: string;
   onClick: () => void;
   danger?: boolean;
+  title?: string;
 }) {
   return (
     <button
       type="button"
+      title={title}
       onClick={onClick}
       className={
         "rounded-md border border-border p-1.5 text-muted-foreground transition hover:bg-neutral-surface " +
