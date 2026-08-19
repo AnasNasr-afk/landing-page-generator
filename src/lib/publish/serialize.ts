@@ -10,6 +10,13 @@ import {
 } from "@/lib/builder-types";
 import { IMAGE_MAP } from "@/lib/builder-content";
 import {
+  filtersToQuery,
+  readCategoryPath,
+  readFilterSummary,
+  readFilterValues,
+  readListingItems,
+} from "@/lib/listings-api";
+import {
   DEFAULT_CTA_COLOR,
   TONE_COLOR,
   backgroundStyle,
@@ -370,9 +377,17 @@ function serializeForm(el: PageElement, o: SerializeOptions): string {
 function serializeListings(el: PageElement, o: SerializeOptions): string {
   const p = el.props;
   const count = Math.max(1, Math.min(12, num(p["count"], 4)));
-  const filters = [p["category"], p["make"], p["model"], p["area"]]
-    .map((v) => str(v))
-    .filter(Boolean);
+  const path = readCategoryPath(p["categoryPath"]);
+  // Pages saved before the category cascade carry flat filter strings; both
+  // shapes have to publish, and the canvas makes the same choice.
+  const filters = [
+    ...(path.length
+      ? path.map((c) => ltext(c.name, o.lang))
+      : [p["category"], p["make"], p["model"], p["area"]].map((v) => str(v)).filter(Boolean)),
+    ...readFilterSummary(p["filterSummary"]).map((l) => ltext(l, o.lang)),
+  ];
+  const leaf = path[path.length - 1];
+  const items = readListingItems(p["items"]);
   const title = esc(ltext(p["title"], o.lang));
 
   const chips = filters.length
@@ -390,7 +405,17 @@ function serializeListings(el: PageElement, o: SerializeOptions): string {
   return (
     `<section class="fs-lp-lst"${attrs({
       "data-fs-listings": true,
-      "data-fs-category": str(p["category"]),
+      // The leaf is what the host queries; the full path is carried alongside
+      // it so a breadcrumb can be rebuilt without a second lookup.
+      "data-fs-category": leaf ? leaf.id : str(p["category"]),
+      "data-fs-category-path": path.map((c) => c.id).join("/"),
+      // Applied facets, already in the query-string form the listings API
+      // takes, so the host can forward it without re-encoding.
+      "data-fs-filters": filtersToQuery(readFilterValues(p["filters"])),
+      // The exact listings the editor curated. A host that wants the block
+      // frozen resolves these ids; one that wants it live ignores them and
+      // re-runs the category + filters above.
+      "data-fs-listing-ids": items.map((l) => l.id).join(","),
       "data-fs-make": str(p["make"]),
       "data-fs-model": str(p["model"]),
       "data-fs-area": str(p["area"]),

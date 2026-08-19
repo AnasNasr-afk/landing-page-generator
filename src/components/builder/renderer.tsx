@@ -11,6 +11,7 @@ import {
   t,
 } from "@/lib/builder-types";
 import { IMAGE_MAP, MOCK_LISTINGS } from "@/lib/builder-content";
+import { readCategoryPath, readFilterSummary, readListingItems } from "@/lib/listings-api";
 import {
   DEFAULT_CTA_COLOR,
   TONE_COLOR,
@@ -489,6 +490,45 @@ export function ElementView({
       return <LeadForm el={el} lang={lang} onFire={onFire} bind={bind} />;
     case "listings": {
       const count = Number(g<number>("count") || 4);
+      const path = readCategoryPath(g("categoryPath"));
+      const items = readListingItems(g("items"));
+
+      // Chips describe the branch the editor drilled into, then the facets they
+      // narrowed it by. Pages saved before the category cascade existed still
+      // carry flat filter strings, so those are used when there is no path.
+      const chips = [
+        ...(path.length
+          ? path.map((c) => t(c.name, lang))
+          : [
+              g<string>("category"),
+              g<string>("make"),
+              g<string>("model"),
+              g<string>("area"),
+            ].filter(Boolean)),
+        ...readFilterSummary(g("filterSummary")).map((l) => t(l, lang)),
+      ];
+
+      // Nothing previewed yet: keep the mock cards so the block still shows its
+      // shape on the canvas, the same reason the published slot ships
+      // placeholders.
+      const cards = items.length
+        ? items.slice(0, count).map((l) => ({
+            key: l.id,
+            tag: l.tag ?? "",
+            title: t(l.title, lang),
+            price: l.price,
+            area: t(l.area, lang),
+            image: l.image,
+          }))
+        : MOCK_LISTINGS.slice(0, count).map((l) => ({
+            key: l.title,
+            tag: l.tag,
+            title: l.title,
+            price: l.price,
+            area: l.area,
+            image: undefined,
+          }));
+
       return (
         <div>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -496,26 +536,31 @@ export function ElementView({
               {t(g<LText>("title"), lang)}
             </h3>
             <div className="flex flex-wrap gap-1.5 text-[11px]">
-              {[g<string>("category"), g<string>("make"), g<string>("model"), g<string>("area")]
-                .filter(Boolean)
-                .map((f) => (
-                  <span key={f} className="rounded-full bg-brand-soft px-2.5 py-1 font-medium text-brand">
-                    {f}
-                  </span>
-                ))}
+              {chips.map((f, i) => (
+                <span
+                  key={`${i}-${f}`}
+                  className="rounded-full bg-brand-soft px-2.5 py-1 font-medium text-brand"
+                >
+                  {f}
+                </span>
+              ))}
             </div>
           </div>
-          {editing && (
+          {editing && !items.length && (
             <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-700">
               <LucideIcon name="Plug" className="size-3.5" />
-              API-dependent integration — mocked data in prototype
+              Pick a category and run “Show listings” to preview real results
             </div>
           )}
           <div className="grid gap-4 @min-[640px]:grid-cols-2 @min-[1024px]:grid-cols-4">
-            {MOCK_LISTINGS.slice(0, count).map((l) => (
-              <div key={l.title} className="overflow-hidden rounded-2xl border border-border bg-background shadow-card">
+            {cards.map((l) => (
+              <div key={l.key} className="overflow-hidden rounded-2xl border border-border bg-background shadow-card">
                 <div className="flex h-28 items-center justify-center bg-neutral-surface text-muted-foreground">
-                  <LucideIcon name="Car" className="size-8" />
+                  {l.image ? (
+                    <img src={l.image} alt="" className="size-full object-cover" />
+                  ) : (
+                    <LucideIcon name="Car" className="size-8" />
+                  )}
                 </div>
                 <div className="p-3">
                   <div className="text-xs font-medium text-brand">{l.tag}</div>
