@@ -28,6 +28,7 @@ import {
   DEFAULT_TEXT_COLOR,
 } from "@/lib/container-bg";
 import { LucideIcon } from "./renderer";
+import { ListingsEditor } from "./listings-picker";
 
 function LInput({
   value,
@@ -535,35 +536,10 @@ function ElementEditor({
     case "listings":
       return (
         <>
-          <Pill tone="warn">API-dependent integration</Pill>
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            Live inventory requires the 4Sale listings API. The prototype renders mocked results.
-          </p>
           <Field label="Block title">
             <LInput value={g<LText>("title")} lang={lang} onChange={(v) => update({ title: v })} />
           </Field>
-          <Field label="Category">
-            <SelectInput
-              value={g<string>("category")}
-              onChange={(v) => update({ category: v })}
-              options={["Cars", "Real Estate", "Electronics", "Services", "Heavy Equipment"].map((c) => ({
-                value: c,
-                label: c,
-              }))}
-            />
-          </Field>
-          <Field label="Make">
-            <TextInput value={g<string>("make")} onChange={(e) => update({ make: e.target.value })} />
-          </Field>
-          <Field label="Model">
-            <TextInput value={g<string>("model")} onChange={(e) => update({ model: e.target.value })} />
-          </Field>
-          <Field label="Area">
-            <TextInput value={g<string>("area")} onChange={(e) => update({ area: e.target.value })} />
-          </Field>
-          <Field label="Listings displayed">
-            <SliderInput value={Number(g<number>("count"))} min={2} max={6} step={1} suffix="" onChange={(v) => update({ count: v })} />
-          </Field>
+          <ListingsEditor props={p} lang={lang} update={update} />
         </>
       );
     case "spacer":

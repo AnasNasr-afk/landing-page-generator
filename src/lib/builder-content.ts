@@ -132,12 +132,16 @@ export function defaultProps(type: ElementType): Record<string, unknown> {
         ],
       };
     case "listings":
+      // `categoryPath` is the selected branch of the 4Sale category tree, root
+      // first; `filters` are the facets applied within it, keyed by field id;
+      // `items` is whatever the editor last previewed and applied. All start
+      // empty so a freshly dropped block shows placeholders until someone picks
+      // a category — see `src/lib/listings-api.ts`.
       return {
         title: L("Featured listings", "إعلانات مميزة"),
-        category: "Cars",
-        make: "Toyota",
-        model: "Land Cruiser",
-        area: "Kuwait City",
+        categoryPath: [],
+        filters: {},
+        items: [],
         count: 4,
       };
     case "faq":
@@ -285,7 +289,19 @@ export const businessProfileContainers = (): Container[] => [
     columns: [
       [
         el("heading", { text: L("Live inventory on your page", "مخزونك مباشرة على صفحتك"), level: "h2", align: "center" }),
-        el("listings", {}),
+        // Seeded with a branch already selected and two facets applied, so the
+        // demo page opens the cascade three levels deep with the filter rail
+        // already narrowed. `items` stays empty — the block is meant to show
+        // its unpreviewed state until someone runs the picker.
+        el("listings", {
+          categoryPath: [
+            { id: "cars", name: L("Cars", "سيارات") },
+            { id: "cars-toyota", name: L("Toyota", "تويوتا") },
+            { id: "cars-toyota-landcruiser", name: L("Land Cruiser", "لاند كروزر") },
+          ],
+          filters: { year: ["2025", "2024"], transmission: ["automatic"] },
+          filterSummary: [L("2025", "2025"), L("2024", "2024"), L("Automatic", "أوتوماتيك")],
+        }),
       ],
     ],
   },
