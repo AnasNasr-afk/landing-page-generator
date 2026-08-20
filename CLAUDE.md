@@ -79,6 +79,13 @@ Two direct-manipulation paths sit alongside the right-hand properties panel:
   the subtle part (removing an element shifts later indices down by one, so a target
   slot below the source must be decremented — otherwise dragging down by one is a
   no-op). Containers still reorder via the panel arrows.
+
+  There are **two kinds of drop target**, and they must not both react to one drag: a
+  `DropSlot` is a position inside a column and takes elements, a `ContainerSlot` is the
+  gap between two containers and takes saved blocks. Column handlers therefore test
+  `elementDrag` rather than `drag`, and the gaps only respond to `kind === "block"`.
+  The gaps are zero-height with an absolutely positioned hit area, so switching targets
+  on at the start of a drag does not shift the canvas under the pointer.
 - **Double-click to edit text** in place, via `contentEditable` in `renderer.tsx`
   (`useInlineEdit`). Enter commits (Shift+Enter for multiline fields), Escape reverts,
   blur commits. Reads `innerText` so paragraph line breaks survive.
@@ -90,6 +97,57 @@ Two direct-manipulation paths sit alongside the right-hand properties panel:
 locally it was possible to leave several nodes `contentEditable` at once when a blur
 never fired; a single lifted value makes that unreachable. Dragging is disabled on the
 element being edited, since a draggable ancestor hijacks text selection.
+
+## Templates (`src/lib/template-api.ts` + the backend)
+
+A template stores the **`Container[]` source tree**, not published HTML: it exists to be
+reopened and edited, so it keeps the input to `renderer.tsx`, not the output of
+`serialize.ts`. Two kinds, both on the same collection:
+
+- **`page`** — every container, replaces the canvas and starts a new landing page.
+- **`block`** — exactly one container, inserted into the page already open, below the
+  selected container or at the end. The backend rejects a `block` with more than one.
+
+Everything goes through `reId` on the way **in and out**, so a saved template shares no
+ids with the page it came from and an inserted copy shares none with the template. Both
+directions were observed: editing an inserted block must not write back into the library.
+
+The seeded templates in `builder-content.ts` stay local and are marked `system` — they
+ship with the builder, are not stored in Mongo, and cannot be deleted. `fetchTemplates`
+is prepended to them on mount, which is why the load effect filters state down to
+`system` before merging rather than replacing it.
+
+**The two kinds live in different places, on purpose.** Page templates are the Templates
+screen; blocks are a tab in the left panel beside Elements, and are the only place blocks
+appear — they are dropped into the page you are looking at, so choosing one on a screen
+where the canvas is not visible meant picking blind. `TemplatesScreen` therefore receives
+`pageTemplates`, never the whole library.
+
+Each block card carries a **`BlockPreview`** (`src/components/builder/block-preview.tsx`):
+a miniature wireframe of the container, drawn from the same tree. It is a third reader of
+`Container[]` after `renderer.tsx` and `serialize.ts`, but deliberately lossy — real text
+is an unreadable smudge at 80px tall, so it draws element *shapes* instead, keeps the real
+column widths and background, and drops in the real image when there is one. Shapes are
+`bg-current` so they invert by themselves on a dark container, and unlike the other two
+readers its `switch` has **no `never` guard**: a new element type should fall through to a
+generic bar rather than break the build, because a wrong thumbnail is not a wrong page.
+
+Page-template cards use the same component on their **opening container only** — the rest
+of the page is not drawn. Every template starts with a hero, so the card leans on its name
+and description to tell them apart; if that stops being enough, stacking a preview per
+container is the change to make.
+
+Whichever path adds a block — dragging it in, or clicking it in the panel — `insertBlock`
+selects the new container, scrolls it into view and outlines it for a moment, so an insert
+is never a silent change somewhere off screen. Blocks are also deleted from that tab,
+since they no longer appear in the library screen.
+
+That scroll goes through a **ref map keyed by container id, not a `data-` attribute**:
+`uid()` is random, so an id rendered into the markup differs between the SSR pass and the
+client one and React reports a hydration mismatch.
+
+SEO settings deliberately do not travel with a template: a copied slug would collide with
+the page it came from.
 
 ## Publishing (`src/lib/publish/`)
 

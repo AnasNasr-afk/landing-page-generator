@@ -1,6 +1,6 @@
 import { type Lang, type LandingPage, type LText, t } from "@/lib/builder-types";
 import { Field, Pill, Section, SelectInput, TextArea, TextInput, Toggle } from "./controls";
-import { LucideIcon } from "./renderer";
+import { UiIcon as Icon } from "./ui-icon";
 
 const PENDING = [
   { title: "Arabic / English URL structure", note: "Sub-directory vs sub-domain vs parameter — not decided." },
@@ -75,7 +75,7 @@ export function SeoPanel({
               />
             </Field>
             <div className="flex items-start gap-2 rounded-lg bg-amber-50 p-2.5 text-[11px] text-amber-800">
-              <LucideIcon name="AlertTriangle" className="mt-0.5 size-3.5 shrink-0" />
+              <Icon name="AlertTriangle" className="mt-0.5 size-3.5 shrink-0" />
               Canonical + hreflang rules for AR/EN pairs are pending SEO validation.
             </div>
           </Section>
@@ -116,7 +116,7 @@ export function SeoPanel({
 
           <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-4">
             <div className="flex items-center gap-2">
-              <LucideIcon name="ShieldQuestion" className="size-4 text-amber-700" />
+              <Icon name="ShieldQuestion" className="size-4 text-amber-700" />
               <h3 className="text-sm font-semibold text-amber-900">Technical SEO — pending validation</h3>
             </div>
             <p className="mt-1 text-[11px] text-amber-800">
@@ -177,7 +177,7 @@ export function PageSettingsPanel({
           />
         </Field>
         <div className="flex items-start gap-2 rounded-lg bg-amber-50 p-2.5 text-[11px] text-amber-800">
-          <LucideIcon name="Languages" className="mt-0.5 size-3.5 shrink-0" />
+          <Icon name="Languages" className="mt-0.5 size-3.5 shrink-0" />
           Arabic and English are two versions of the same page entity. The public URL pattern for each
           language is pending SEO validation.
         </div>

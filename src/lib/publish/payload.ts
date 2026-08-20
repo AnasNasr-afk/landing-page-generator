@@ -1,8 +1,8 @@
 import { type Lang, type LandingPage, t } from "@/lib/builder-types";
-import { FORM_ACTION, PUBLISH_API, assetOrigin } from "./config";
+import { FONT_BASE, FORM_ACTION, PUBLISH_API, assetOrigin } from "./config";
 import { esc } from "./html";
 import { serializePage } from "./serialize";
-import { PUBLISH_CSS } from "./styles";
+import { PUBLISH_CSS, fontFaceCss } from "./styles";
 
 /**
  * The publish payload — what gets stored, and what the website fetches.
@@ -34,6 +34,8 @@ export type PublishPayload = {
   slug: string;
   name: string;
   status: "published";
+  /** The source tree used to reopen this page in the builder. */
+  source: LandingPage;
   /** One stylesheet shared by every locale. */
   css: string;
   locales: Partial<Record<Lang, PublishedLocale>>;
@@ -67,7 +69,8 @@ export function buildPayload(page: LandingPage): PublishPayload {
     slug: page.seo.slug || page.slug,
     name: page.name,
     status: "published",
-    css: PUBLISH_CSS,
+    source: { ...page, status: "published" },
+    css: fontFaceCss(FONT_BASE) + PUBLISH_CSS,
     locales,
   };
 }

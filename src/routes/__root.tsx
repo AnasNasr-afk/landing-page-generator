@@ -77,26 +77,39 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "4Sale Landing Page Builder" },
+      { title: "landing-page-generator" },
       { name: "description", content: "Self-service landing page builder for the 4Sale marketing and SEO team." },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "4Sale Landing Page Builder" },
+      { property: "og:title", content: "landing-page-generator" },
       { property: "og:description", content: "Build, preview and publish branded 4Sale landing pages." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
       {
         rel: "stylesheet",
         href: appCss,
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+      // The `v` is a cache-buster. Chrome keys its favicon cache on the icon URL
+      // and holds onto a previous result — including a failed fetch — across
+      // hard reloads, so a changed icon needs a changed URL to be picked up.
+      { rel: "icon", href: "/favicon.svg?v=3", type: "image/svg+xml" },
+      // SS Sakr Soft is self-hosted from /public/fonts and declared in
+      // styles.css, so there are no external font requests. Regular and Bold
+      // cover almost all rendered text, so they are preloaded; the other
+      // weights load on demand.
       {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap",
+        rel: "preload",
+        as: "font",
+        type: "font/woff2",
+        href: "/fonts/SSSakrSoft-Regular.woff2",
+        crossOrigin: "anonymous",
+      },
+      {
+        rel: "preload",
+        as: "font",
+        type: "font/woff2",
+        href: "/fonts/SSSakrSoft-Bold.woff2",
+        crossOrigin: "anonymous",
       },
     ],
   }),
