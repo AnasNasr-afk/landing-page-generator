@@ -9,11 +9,11 @@ import {
   summariseFilters,
 } from "@/lib/listings-api";
 import { Toggle } from "./controls";
-import { LucideIcon } from "./renderer";
+import { UiIcon as Icon } from "./ui-icon";
 import { cn } from "@/lib/utils";
 
 /**
- * The filter rail for the listings picker.
+ * The filter rail for the listings editor (right-hand properties panel).
  *
  * Which controls appear is decided by the server, not by this file — 4Sale's
  * own category pages offer storage capacity under mobiles and mileage under
@@ -21,11 +21,8 @@ import { cn } from "@/lib/utils";
  * switches on a category name.
  *
  * Fields flagged `primary` stay open; the rest collapse behind "More filters",
- * which is the only thing keeping a rail of ten facets usable in the space a
- * results grid leaves over.
+ * which is the only thing keeping a rail of ten facets usable in a 320px panel.
  */
-
-const num = (n: number) => n.toLocaleString("en-US");
 
 export function FilterRail({
   fields,
@@ -33,12 +30,14 @@ export function FilterRail({
   lang,
   loading,
   onChange,
+  className,
 }: {
   fields: FilterField[];
   values: FilterValues;
   lang: Lang;
   loading: boolean;
   onChange: (next: FilterValues) => void;
+  className?: string;
 }) {
   const [showMore, setShowMore] = useState(false);
 
@@ -53,8 +52,8 @@ export function FilterRail({
 
   if (loading) {
     return (
-      <p className="flex items-center gap-2 p-4 text-[11px] text-muted-foreground">
-        <LucideIcon name="Loader" className="size-3 animate-spin" />
+      <p className={cn("flex items-center gap-2 p-4 text-[11px] text-muted-foreground", className)}>
+        <Icon name="Loader" className="size-3 animate-spin" />
         Loading filters…
       </p>
     );
@@ -62,8 +61,8 @@ export function FilterRail({
 
   if (fields.length === 0) {
     return (
-      <p className="p-4 text-[11px] leading-relaxed text-muted-foreground">
-        Pick a category to see the filters available for it.
+      <p className={cn("p-4 text-[11px] leading-relaxed text-muted-foreground", className)}>
+        No filters for this search. Pick a category to get the facets specific to it.
       </p>
     );
   }
@@ -72,7 +71,7 @@ export function FilterRail({
   const secondary = fields.filter((f) => !f.primary);
 
   return (
-    <div className="space-y-4 p-4">
+    <div className={cn("space-y-4 p-4", className)}>
       {primary.map((f) => (
         <FilterGroup key={f.id} field={f} value={values[f.id]} lang={lang} onChange={set} />
       ))}
@@ -84,7 +83,7 @@ export function FilterRail({
             onClick={() => setShowMore((v) => !v)}
             className="flex w-full items-center gap-1.5 border-t border-border pt-3 text-xs font-medium text-brand transition hover:text-brand-strong"
           >
-            <LucideIcon
+            <Icon
               name="ChevronDown"
               className={cn("size-3.5 transition-transform", showMore && "rotate-180")}
             />
@@ -182,7 +181,7 @@ function MultiField({
                 on ? "border-brand bg-brand text-brand-foreground" : "border-border",
               )}
             >
-              {on && <LucideIcon name="Check" className="size-3" />}
+              {on && <Icon name="Check" className="size-3" />}
             </span>
             <span className="truncate">{t(o.label, lang)}</span>
           </button>
@@ -193,9 +192,8 @@ function MultiField({
 }
 
 /**
- * Two sliders rather than a pair of number inputs: a half-typed number is
- * `NaN`, and every keystroke would fire a re-query against a nonsense bound.
- * Sliders can only ever produce a valid number in range.
+ * From/To number inputs rather than sliders: Atlas number attributes (Price,
+ * Mileage, …) arrive with no min/max, so a slider would have to invent a band.
  */
 function RangeField({
   field,
@@ -208,46 +206,46 @@ function RangeField({
   lang: Lang;
   onChange: (id: string, value: FilterValue | undefined) => void;
 }) {
-  const range: RangeValue = isRangeValue(value) ? value : { min: field.min, max: field.max };
+  const range: RangeValue = isRangeValue(value) ? value : {};
 
-  // A range spanning the whole band is not a filter — dropping it keeps it out
-  // of the chip row and out of the published query.
-  const commit = (next: RangeValue) =>
-    onChange(field.id, next.min <= field.min && next.max >= field.max ? undefined : next);
+  const commit = (next: RangeValue) => {
+    if (next.min == null && next.max == null) onChange(field.id, undefined);
+    else onChange(field.id, next);
+  };
 
-  const row = (which: "min" | "max", label: string) => (
+  const parse = (raw: string): number | undefined => {
+    if (raw.trim() === "") return undefined;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
+  const box = (which: "min" | "max", placeholder: string) => (
     <div className="flex items-center gap-2">
       <span className="w-8 shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
-        {label}
+        {placeholder}
       </span>
       <input
-        type="range"
-        min={field.min}
-        max={field.max}
-        step={field.step}
-        value={range[which]}
+        type="number"
+        min={0}
+        inputMode="numeric"
+        placeholder="—"
+        value={range[which] ?? ""}
         onChange={(e) => {
-          const v = Number(e.target.value);
-          // Dragging one handle past the other would invert the range; clamping
-          // makes the two sliders behave like one control.
-          commit(
-            which === "min"
-              ? { min: Math.min(v, range.max), max: range.max }
-              : { min: range.min, max: Math.max(v, range.min) },
-          );
+          const n = parse(e.target.value);
+          commit(which === "min" ? { min: n, max: range.max } : { min: range.min, max: n });
         }}
-        className="h-1.5 flex-1 accent-[var(--brand)]"
+        className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs tabular-nums outline-none transition placeholder:text-muted-foreground focus:border-brand"
       />
     </div>
   );
 
   return (
     <div className="space-y-1.5">
-      {row("min", "From")}
-      {row("max", "To")}
-      <p className="text-[11px] tabular-nums text-muted-foreground">
-        {num(range.min)} – {num(range.max)} {t(field.unit, lang)}
-      </p>
+      {box("min", "From")}
+      {box("max", "To")}
+      {t(field.unit, lang) && (
+        <p className="text-[11px] text-muted-foreground">{t(field.unit, lang)}</p>
+      )}
     </div>
   );
 }
@@ -296,7 +294,7 @@ export function FilterChips({
           className="flex items-center gap-1 rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-medium text-brand transition hover:bg-brand hover:text-brand-foreground"
         >
           {t(c.label, lang)}
-          <LucideIcon name="X" className="size-3" />
+          <Icon name="X" className="size-3" />
         </button>
       ))}
       <button

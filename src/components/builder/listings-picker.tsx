@@ -8,45 +8,45 @@ import {
   type Listing,
   fetchCategories,
   fetchFilters,
-  fetchListings,
   isLiveCatalogue,
   readCategoryPath,
   readFilterValues,
+  readKeyword,
   readListingItems,
+  searchListings,
   summariseFilters,
 } from "@/lib/listings-api";
-import { Field, Pill, SelectInput, SliderInput } from "./controls";
+import { Field, Pill, SelectInput, SliderInput, TextInput } from "./controls";
 import { FilterChips, FilterRail } from "./listings-filters";
-import { LucideIcon } from "./renderer";
+import { UiIcon as Icon } from "./ui-icon";
 import { cn } from "@/lib/utils";
 
 /**
- * Category cascade for the listings block, plus the results modal it opens.
+ * Category cascade, keyword, and filters for the listings block (right-hand
+ * editor), plus the results modal they open.
  *
- * The editor drills down one dropdown at a time — a new level appears whenever
- * the chosen category has children — and `Show listings` opens the picker on
- * the branch they stopped on. Results land in a modal over a blurred builder
- * rather than inline in the 320px panel, because a listings grid is the one
- * thing in this app that has to be judged at page width.
+ * The **category tree is real**, **search is real**, and **filters are real**
+ * (`GET /categories/{id}/attributes/with-parent` along the selected path).
+ * Search is keyword-only: `category_id` made Atlas call V4 `advancedSearch`,
+ * which 502s / times out. A chosen category supplies the search term when no
+ * keyword is typed, and narrows results by `cat_id` once you have drilled to a
+ * leaf. Selected filters live on the editor and are saved on the block for
+ * publish; they do not go on `/search`.
  *
- * Filtering lives in the modal, not here: narrowing results is only meaningful
- * with the results in view, and 4Sale's own category pages put the two
- * together for the same reason.
- *
- * The chosen listings are written back into the element's props, so the canvas
- * shows what the editor just approved instead of a fixed mock.
+ * Results land in a listings-only modal over a blurred builder — three cards
+ * across, same card chrome as the canvas — so the editor is judging a grid at
+ * page width, not editing filters next to it.
  */
 
 const levelLabel = (i: number, total: number) =>
   i === 0 ? "Category" : total > 2 ? `Subcategory ${i}` : "Subcategory";
 
 /**
- * How many results the picker pulls.
+ * How many results each picker page pulls.
  *
- * Deliberately far more than the block will render — the modal is for filtering
- * a realistic pool down to a handful, so it has to hold a pool worth filtering.
+ * Atlas caps a page at 50; 30 stays under that and keeps the grid scannable.
  */
-const POOL = 48;
+const PAGE_SIZE = 30;
 
 export function ListingsEditor({
   props,
@@ -57,6 +57,7 @@ export function ListingsEditor({
   lang: Lang;
   update: (patch: Record<string, unknown>) => void;
 }) {
+  const keyword = readKeyword(props["keyword"]);
   const path = readCategoryPath(props["categoryPath"]);
   const filters = readFilterValues(props["filters"]);
   const items = readListingItems(props["items"]);
@@ -66,6 +67,8 @@ export function ListingsEditor({
   const [levels, setLevels] = useState<Category[][]>([]);
   const [loadingTree, setLoadingTree] = useState(true);
   const [treeError, setTreeError] = useState<string | null>(null);
+  const [fields, setFields] = useState<FilterField[]>([]);
+  const [loadingFields, setLoadingFields] = useState(false);
   const [open, setOpen] = useState(false);
 
   const pathKey = path.map((p) => p.id).join("/");
@@ -106,6 +109,36 @@ export function ListingsEditor({
     };
   }, [pathKey]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!pathKey) {
+        setFields([]);
+        setLoadingFields(false);
+        return;
+      }
+      setLoadingFields(true);
+      try {
+        const found = await fetchFilters(path);
+        if (!cancelled) setFields(found);
+      } catch {
+        if (!cancelled) setFields([]);
+      } finally {
+        if (!cancelled) setLoadingFields(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathKey]);
+
+  const changeFilters = (next: FilterValues) =>
+    update({
+      filters: next,
+      filterSummary: summariseFilters(fields, next).map((c) => c.label),
+    });
+
   /**
    * Selecting at depth `i` discards everything below it — the old deeper
    * choices belong to a branch that is no longer selected, and keeping them
@@ -117,11 +150,12 @@ export function ListingsEditor({
     const next = path.slice(0, i);
     if (picked) next.push({ id: picked.id, name: picked.name });
 
-    // Filters belong to a vertical: mobiles have storage capacity, cars have
-    // mileage. Changing the root invalidates the whole schema, so the values go
-    // with it — but drilling within a vertical keeps them.
-    const rootChanged = next[0]?.id !== path[0]?.id;
-    update(rootChanged ? { categoryPath: next, filters: {} } : { categoryPath: next });
+    // Attributes are per category id, so changing the leaf invalidates the
+    // saved values — a phone's storage options do not apply to a car.
+    const leafChanged = next[next.length - 1]?.id !== path[path.length - 1]?.id;
+    update(
+      leafChanged ? { categoryPath: next, filters: {}, filterSummary: [] } : { categoryPath: next },
+    );
   };
 
   return (
@@ -130,12 +164,20 @@ export function ListingsEditor({
         <>
           <Pill tone="warn">API-dependent integration</Pill>
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            Live inventory requires the 4Sale listings API. Until{" "}
-            <code className="rounded bg-neutral-surface px-1">VITE_LISTINGS_API</code> is set, the
-            categories, filters and results below are mocked.
+            Live inventory requires the 4Sale APIs. Set{" "}
+            <code className="rounded bg-neutral-surface px-1">VITE_LISTINGS_API</code> to the Atlas
+            service URL.
           </p>
         </>
       )}
+
+      <Field label="Keyword">
+        <TextInput
+          value={keyword}
+          placeholder="e.g. bmw 520i"
+          onChange={(e) => update({ keyword: e.target.value })}
+        />
+      </Field>
 
       {levels.map((options, i) => (
         <Field key={i} label={levelLabel(i, levels.length)}>
@@ -152,11 +194,32 @@ export function ListingsEditor({
 
       {loadingTree && (
         <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
-          <LucideIcon name="Loader" className="size-3 animate-spin" />
+          <Icon name="Loader" className="size-3 animate-spin" />
           Loading categories…
         </p>
       )}
       {treeError && <p className="text-[11px] font-medium text-red-600">{treeError}</p>}
+
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        A keyword on its own is enough, and so is a category. With no keyword, the deepest category
+        you pick becomes the search term.
+      </p>
+
+      <div className="space-y-2">
+        <span className="block text-xs font-medium text-foreground/70">Filters</span>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Saved on the published page. They do not narrow the keyword search in the listings window.
+        </p>
+        <FilterRail
+          fields={fields}
+          values={filters}
+          lang={lang}
+          loading={loadingFields}
+          onChange={changeFilters}
+          className="p-0"
+        />
+        <FilterChips fields={fields} values={filters} lang={lang} onChange={changeFilters} />
+      </div>
 
       <Field label="Listings displayed">
         <SliderInput
@@ -175,7 +238,7 @@ export function ListingsEditor({
         disabled={loadingTree}
         className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-brand-foreground shadow-brand transition hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-50"
       >
-        <LucideIcon name="Search" className="size-4" />
+        <Icon name="Search" className="size-4" />
         {items.length > 0 ? "Edit selection" : "Show listings"}
       </button>
 
@@ -187,21 +250,12 @@ export function ListingsEditor({
 
       {open && (
         <ListingsModal
-          path={path}
           lang={lang}
           count={count}
-          filters={filters}
+          keyword={keyword}
+          path={path}
           initialItems={items}
-          onFiltersChange={(next, fields) =>
-            // The rendered labels are persisted next to the raw values because
-            // only the picker ever holds the filter schema — the canvas and the
-            // published page have no way to look up what `storage: ["256"]`
-            // is called.
-            update({
-              filters: next,
-              filterSummary: summariseFilters(fields, next).map((c) => c.label),
-            })
-          }
+          onKeywordChange={(next) => update({ keyword: next })}
           onClose={() => setOpen(false)}
           onApply={(picked) => {
             // The selection is the block's contents, so `count` follows it —
@@ -216,63 +270,61 @@ export function ListingsEditor({
   );
 }
 
-/** Stable regardless of key order, so re-renders do not look like new queries. */
-const stableKey = (filters: FilterValues) =>
-  JSON.stringify(
-    Object.keys(filters)
-      .sort()
-      .map((k) => [k, filters[k]]),
-  );
-
 /**
- * Full-screen results picker.
+ * Full-screen results picker — listings only, three across.
  *
  * `fixed inset-0` with `backdrop-blur` puts the whole builder out of focus
  * behind it, which is the point: the editor is judging a listings grid at page
- * width, not editing the page underneath.
+ * width, not editing filters or the page underneath.
  *
- * The selection is held as a map rather than a set of ids because it has to
- * survive re-filtering — tick three cars, narrow the price band, and the three
- * you already chose must still be there to submit even though the result set
- * they came from is gone.
+ * Cards match the canvas listing chrome (rounded, short image, title / price /
+ * area) so the picker does not inflate them past the usual size. The selection
+ * is held as a map rather than a set of ids because it has to survive
+ * re-querying — tick three cars, refine the keyword, and the three already
+ * chosen must still be there to submit even though the result set they came
+ * from is gone.
  */
 function ListingsModal({
-  path,
   lang,
   count,
-  filters,
+  keyword,
+  path,
   initialItems,
-  onFiltersChange,
+  onKeywordChange,
   onClose,
   onApply,
 }: {
-  path: CategoryPath;
   lang: Lang;
   count: number;
-  filters: FilterValues;
+  keyword: string;
+  path: CategoryPath;
   initialItems: Listing[];
-  onFiltersChange: (next: FilterValues, fields: FilterField[]) => void;
+  onKeywordChange: (next: string) => void;
   onClose: () => void;
   onApply: (items: Listing[]) => void;
 }) {
-  const [fields, setFields] = useState<FilterField[]>([]);
-  const [loadingFields, setLoadingFields] = useState(true);
-
   const [listings, setListings] = useState<Listing[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   const [selected, setSelected] = useState<Map<string, Listing>>(
     () => new Map(initialItems.map((l) => [l.id, l])),
   );
 
-  const pathKey = path.map((p) => p.id).join("/");
-  const filtersKey = stableKey(filters);
+  const leaf = path[path.length - 1];
 
-  // Read through refs so the query effect can key off the serialised filters
-  // without re-running on every parent render.
-  const filtersRef = useRef(filters);
-  filtersRef.current = filters;
+  /**
+   * What actually gets sent as `q`.
+   *
+   * Trimmed, so typing the space between two words does not fire a query for a
+   * term the user has not finished. With no keyword the deepest category name
+   * stands in — `q` is mandatory upstream, so a category with no search term
+   * would otherwise have nothing to send.
+   */
+  const query = keyword.trim() || (leaf ? leaf.name.en : "");
+
+  const queryRef = useRef(query);
   const countRef = useRef(count);
   countRef.current = count;
 
@@ -290,61 +342,75 @@ function ListingsModal({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoadingFields(true);
-      try {
-        const found = await fetchFilters(path);
-        if (!cancelled) setFields(found);
-      } catch {
-        // A missing filter schema is not worth blocking the results over; the
-        // rail simply renders empty.
-        if (!cancelled) setFields([]);
-      } finally {
-        if (!cancelled) setLoadingFields(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathKey]);
+  /**
+   * Results narrowed to the chosen category, client-side.
+   *
+   * Only when the selection is a leaf: listings sit at leaf level, so matching
+   * `cat_id` against a parent (BMW, Used Cars) would discard everything.
+   */
+  const narrowed =
+    leaf && listings.some((l) => l.catId === leaf.id)
+      ? listings.filter((l) => l.catId === leaf.id)
+      : listings;
+  const narrowing = narrowed.length !== listings.length;
 
-  // Debounced so dragging a price slider does not fire a request per pixel.
+  const hasMore = listings.length >= PAGE_SIZE;
+
+  // Debounced so typing does not fire a request per keystroke. A new keyword
+  // or category resets to page 1 before searching, so we never ask Atlas for
+  // page 3 of a term we just started typing.
   useEffect(() => {
+    if (!query) {
+      setListings([]);
+      setLoading(false);
+      setError(null);
+      setPage(1);
+      return;
+    }
+
+    const queryChanged = queryRef.current !== query;
+    if (queryChanged) {
+      queryRef.current = query;
+      if (page !== 1) {
+        setPage(1);
+        return;
+      }
+    }
+
     let cancelled = false;
     setLoading(true);
     setError(null);
 
-    const timer = setTimeout(() => {
-      void (async () => {
-        try {
-          const found = await fetchListings(path, POOL, filtersRef.current);
-          if (cancelled) return;
-          setListings(found);
+    const timer = setTimeout(
+      () => {
+        void (async () => {
+          try {
+            const found = await searchListings(query, PAGE_SIZE, page);
+            if (cancelled) return;
+            setListings(found.listings);
 
-          // First result set only: pre-tick enough for the block so the common
-          // case is one click. Re-running it after a filter change would keep
-          // overwriting a selection the editor is in the middle of making.
-          if (!seeded.current) {
-            seeded.current = true;
-            setSelected(new Map(found.slice(0, countRef.current).map((l) => [l.id, l])));
+            // First result set only: pre-tick enough for the block so the common
+            // case is one click. Re-running it after a keyword or page change
+            // would keep overwriting a selection the editor is in the middle of.
+            if (!seeded.current) {
+              seeded.current = true;
+              setSelected(new Map(found.listings.slice(0, countRef.current).map((l) => [l.id, l])));
+            }
+          } catch (e) {
+            if (!cancelled) setError(e instanceof Error ? e.message : "Could not load listings");
+          } finally {
+            if (!cancelled) setLoading(false);
           }
-        } catch (e) {
-          if (!cancelled) setError(e instanceof Error ? e.message : "Could not load listings");
-        } finally {
-          if (!cancelled) setLoading(false);
-        }
-      })();
-    }, 220);
+        })();
+      },
+      queryChanged ? 320 : 0,
+    );
 
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathKey, filtersKey]);
+  }, [query, page]);
 
   const toggle = (l: Listing) =>
     setSelected((prev) => {
@@ -353,31 +419,28 @@ function ListingsModal({
       return next;
     });
 
-  const pageSelected = listings.length > 0 && listings.every((l) => selected.has(l.id));
+  const pageSelected = narrowed.length > 0 && narrowed.every((l) => selected.has(l.id));
 
   const toggleAll = () =>
     setSelected((prev) => {
       const next = new Map(prev);
-      if (pageSelected) for (const l of listings) next.delete(l.id);
-      else for (const l of listings) next.set(l.id, l);
+      if (pageSelected) for (const l of narrowed) next.delete(l.id);
+      else for (const l of narrowed) next.set(l.id, l);
       return next;
     });
 
   // Emitted in the order they were ticked, which is the order the tray shows —
-  // the results order is not stable across filter changes, so it cannot be the
-  // one that decides page layout.
+  // the results order is not stable across searches, so it cannot be the one
+  // that decides page layout.
   const apply = () => onApply([...selected.values()]);
 
-  const crumb = path.length ? path.map((p) => t(p.name, lang)).join(" › ") : "All categories";
   const stop = useCallback((e: React.MouseEvent) => e.stopPropagation(), []);
 
-  /** The schema is only in scope here, so the parent is handed it with the
-   *  values it needs to label them. */
-  const changeFilters = (next: FilterValues) => onFiltersChange(next, fields);
+  const crumb = path.length ? path.map((p) => t(p.name, lang)).join(" › ") : "All categories";
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-900/40 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-900/40 p-3 backdrop-blur-sm"
       onClick={onClose}
       dir={lang === "ar" ? "rtl" : "ltr"}
     >
@@ -386,12 +449,14 @@ function ListingsModal({
         aria-modal="true"
         aria-label="Select listings"
         onClick={stop}
-        className="flex max-h-[85vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-background shadow-lift"
+        className="flex h-[94vh] w-[96vw] max-w-none flex-col overflow-hidden rounded-2xl bg-background shadow-lift"
       >
-        <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+        <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-3">
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-foreground">Select listings</h3>
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{crumb}</p>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              {query ? `${crumb} · searching “${query}”` : "Enter a keyword or pick a category"}
+            </p>
           </div>
           <button
             type="button"
@@ -399,106 +464,151 @@ function ListingsModal({
             aria-label="Close"
             className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition hover:bg-neutral-surface hover:text-foreground"
           >
-            <LucideIcon name="X" className="size-4" />
+            <Icon name="X" className="size-4" />
           </button>
         </header>
 
-        <div className="flex min-h-0 flex-1">
-          <aside className="w-60 shrink-0 overflow-y-auto border-e border-border bg-neutral-surface/30">
-            <FilterRail
-              fields={fields}
-              values={filters}
-              lang={lang}
-              loading={loadingFields}
-              onChange={changeFilters}
-            />
-          </aside>
-
-          <div className="flex min-w-0 flex-1 flex-col">
-            <div className="space-y-2 border-b border-border px-5 py-2.5">
-              <div className="flex items-center justify-between gap-3">
-                <span className="flex items-center gap-2 text-xs font-medium text-foreground/70">
-                  {loading && <LucideIcon name="Loader" className="size-3 animate-spin" />}
-                  {loading
-                    ? "Loading…"
-                    : `${listings.length} result${listings.length === 1 ? "" : "s"}`}
-                </span>
-                {listings.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={toggleAll}
-                    className="rounded-lg px-2.5 py-1 text-xs font-medium text-brand transition hover:bg-brand-soft"
-                  >
-                    {pageSelected ? "Deselect these" : "Select all"}
-                  </button>
-                )}
-              </div>
-              <FilterChips fields={fields} values={filters} lang={lang} onChange={changeFilters} />
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="space-y-2 border-b border-border px-5 py-2.5">
+            <div className="relative">
+              <Icon
+                name="Search"
+                className="pointer-events-none absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+              />
+              <input
+                type="search"
+                value={keyword}
+                placeholder="Search listings by keyword…"
+                onChange={(e) => onKeywordChange(e.target.value)}
+                className="w-full rounded-lg border border-border bg-background py-1.5 pe-8 ps-8 text-xs outline-none transition placeholder:text-muted-foreground focus:border-brand"
+              />
+              {keyword !== "" && (
+                <button
+                  type="button"
+                  onClick={() => onKeywordChange("")}
+                  aria-label="Clear keyword"
+                  className="absolute end-2 top-1/2 -translate-y-1/2 text-muted-foreground transition hover:text-foreground"
+                >
+                  <Icon name="X" className="size-3.5" />
+                </button>
+              )}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              {error ? (
-                <p className="py-12 text-center text-sm font-medium text-red-600">{error}</p>
-              ) : listings.length === 0 && !loading ? (
-                <p className="py-12 text-center text-sm text-muted-foreground">
-                  No listings matched these filters.
-                </p>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {listings.map((l) => {
-                    const on = selected.has(l.id);
-                    return (
-                      <button
-                        key={l.id}
-                        type="button"
-                        aria-pressed={on}
-                        onClick={() => toggle(l)}
-                        className={cn(
-                          "relative overflow-hidden rounded-xl border bg-background text-start transition",
-                          on
-                            ? "border-brand ring-2 ring-brand/20"
-                            : "border-border opacity-70 hover:opacity-100",
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "absolute end-2 top-2 z-10 flex size-5 items-center justify-center rounded-md border transition",
-                            on
-                              ? "border-brand bg-brand text-brand-foreground"
-                              : "border-border bg-background/90",
-                          )}
-                        >
-                          {on && <LucideIcon name="Check" className="size-3.5" />}
-                        </span>
-
-                        <span className="flex h-24 items-center justify-center bg-neutral-surface">
-                          {l.image ? (
-                            <img src={l.image} alt="" className="size-full object-cover" />
-                          ) : (
-                            <LucideIcon name="Image" className="size-6 text-muted-foreground/60" />
-                          )}
-                        </span>
-                        <span className="block space-y-1 p-3">
-                          {l.tag && (
-                            <span className="block">
-                              <Pill>{l.tag}</Pill>
-                            </span>
-                          )}
-                          <span className="line-clamp-2 block text-sm font-medium text-foreground">
-                            {t(l.title, lang)}
-                          </span>
-                          <span className="block text-sm font-semibold text-brand">{l.price}</span>
-                          <span className="block text-xs text-muted-foreground">
-                            {t(l.area, lang)}
-                          </span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 text-xs font-medium text-foreground/70">
+                {loading && <Icon name="Loader" className="size-3 animate-spin" />}
+                {loading ? "Searching…" : `${narrowed.length} on this page`}
+                {!loading && narrowing && (
+                  <span className="font-normal text-muted-foreground">
+                    in {t(leaf?.name ?? { en: "", ar: "" }, lang)}, of {listings.length} found
+                  </span>
+                )}
+              </span>
+              {narrowed.length > 0 && (
+                <button
+                  type="button"
+                  onClick={toggleAll}
+                  className="rounded-lg px-2.5 py-1 text-xs font-medium text-brand transition hover:bg-brand-soft"
+                >
+                  {pageSelected ? "Deselect these" : "Select all on this page"}
+                </button>
               )}
             </div>
           </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            {error ? (
+              <p className="py-12 text-center text-sm font-medium text-red-600">{error}</p>
+            ) : !query ? (
+              <p className="py-12 text-center text-sm text-muted-foreground">
+                Type a keyword or pick a category — 4Sale&rsquo;s search needs a term.
+              </p>
+            ) : narrowed.length === 0 && !loading ? (
+              <p className="py-12 text-center text-sm text-muted-foreground">
+                {page > 1
+                  ? "No more listings on this page."
+                  : `Nothing matched “${query}”. Try a shorter term.`}
+              </p>
+            ) : (
+              <div className="grid grid-cols-3 gap-4">
+                {narrowed.map((l) => {
+                  const on = selected.has(l.id);
+                  return (
+                    <button
+                      key={l.id}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => toggle(l)}
+                      className={cn(
+                        "relative overflow-hidden rounded-2xl border bg-background text-start shadow-card transition",
+                        on
+                          ? "border-brand ring-2 ring-brand/20"
+                          : "border-border hover:border-brand/40",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "absolute end-2 top-2 z-10 flex size-5 items-center justify-center rounded-md border transition",
+                          on
+                            ? "border-brand bg-brand text-brand-foreground"
+                            : "border-border bg-background/90",
+                        )}
+                      >
+                        {on && <Icon name="Check" className="size-3.5" />}
+                      </span>
+
+                      <span className="flex h-28 items-center justify-center bg-neutral-surface">
+                        {l.image ? (
+                          <img
+                            src={l.image}
+                            alt=""
+                            loading="lazy"
+                            className="size-full object-cover"
+                          />
+                        ) : (
+                          <Icon name="Image" className="size-8 text-muted-foreground/60" />
+                        )}
+                      </span>
+                      <span className="block p-3">
+                        {l.tag && (
+                          <span className="block text-xs font-medium text-brand">{l.tag}</span>
+                        )}
+                        <span className="mt-1 line-clamp-1 block text-sm font-semibold">
+                          {t(l.title, lang)}
+                        </span>
+                        {t(l.price, lang) && (
+                          <span className="mt-1 block text-sm font-bold">{t(l.price, lang)}</span>
+                        )}
+                        <span className="block text-xs opacity-60">{t(l.area, lang)}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {query && !error && (
+            <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-2.5">
+              <button
+                type="button"
+                disabled={page <= 1 || loading}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition hover:bg-neutral-surface disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <span className="text-xs font-medium text-foreground/70">Page {page}</span>
+              <button
+                type="button"
+                disabled={!hasMore || loading}
+                onClick={() => setPage((p) => p + 1)}
+                className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition hover:bg-neutral-surface disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
 
         <SelectionTray
@@ -521,11 +631,10 @@ function ListingsModal({
 }
 
 /**
- * The running selection, kept visible across filter changes.
+ * The running selection, kept visible across searches.
  *
- * Lifted from DAAD's watchlist: without it, narrowing the filters silently
- * discards everything already picked, because the results those picks came from
- * are no longer on screen.
+ * Without it, refining the keyword silently discards everything already picked,
+ * because the results those picks came from are no longer on screen.
  */
 function SelectionTray({
   selected,
@@ -565,7 +674,7 @@ function SelectionTray({
                 className="flex shrink-0 items-center gap-1 rounded-full bg-background px-2.5 py-1 text-[11px] font-medium shadow-panel transition hover:text-brand"
               >
                 <span className="max-w-40 truncate">{t(l.title, lang)}</span>
-                <LucideIcon name="X" className="size-3" />
+                <Icon name="X" className="size-3" />
               </button>
             ))}
             <button

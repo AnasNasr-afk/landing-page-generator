@@ -1,17 +1,23 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import {
   COLUMN_COUNT,
   type Container,
+  type ContainerDirection,
   type ContainerLayout,
   type Cta,
   type ElementType,
   type Lang,
   type LandingPage,
   type Template,
+  containerDirection,
+  containerTracks,
+  defaultTracks,
+  nudgeTracks,
   reId,
   t,
   uid,
@@ -25,12 +31,18 @@ import {
   putElement,
   setLocalizedText,
 } from "@/lib/builder-move";
-import { ContainerView, ElementView, LucideIcon, PageRenderer } from "@/components/builder/renderer";
+import { ContainerView, ElementView, PageRenderer } from "@/components/builder/renderer";
+import { UiIcon as Icon } from "@/components/builder/ui-icon";
 import { ElementsPanel } from "@/components/builder/elements-panel";
 import { PropertiesPanel } from "@/components/builder/properties-panel";
 import { PageSettingsPanel, SeoPanel } from "@/components/builder/seo-panel";
-import { AssetsScreen, SaveTemplateDialog, TemplatesScreen } from "@/components/builder/templates-screen";
+import {
+  AssetsScreen,
+  SaveTemplateDialog,
+  TemplatesScreen,
+} from "@/components/builder/templates-screen";
 import { PublishPanel } from "@/components/builder/publish-panel";
+import { EdgeResizeHandle, BoxResizeFrame } from "@/components/builder/resize-handle";
 import {
   type PublishPayload,
   buildPayload,
@@ -41,13 +53,13 @@ import {
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "4Sale Landing Page Builder — No-code Page Studio" },
+      { title: "landing-page-generator" },
       {
         name: "description",
         content:
           "Self-service 4Sale landing page builder: containers, CTAs, lead forms, marketplace listings, reusable templates and an SEO & AI search panel.",
       },
-      { property: "og:title", content: "4Sale Landing Page Builder" },
+      { property: "og:title", content: "landing-page-generator" },
       {
         property: "og:description",
         content:
@@ -72,6 +84,13 @@ const NAV: { key: Nav; icon: string; label: string }[] = [
   { key: "assets", icon: "Images", label: "Assets" },
 ];
 
+/** Visual scale of the artboard. Independent of Desktop/Mobile width. */
+const ZOOM_MIN = 50;
+const ZOOM_MAX = 200;
+const ZOOM_STEP = 10;
+
+const clampZoom = (n: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(n / 5) * 5));
+
 function BuilderApp() {
   const [page, setPage] = useState<LandingPage>(seedPage);
   const [templates, setTemplates] = useState<Template[]>(seedTemplates);
@@ -80,6 +99,10 @@ function BuilderApp() {
   const [sel, setSel] = useState<Selection>(null);
   const [preview, setPreview] = useState(false);
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
+  const [zoom, setZoom] = useState(100);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const trackDrag = useRef<{ id: string; tracks: number[] } | null>(null);
+  const heightDrag = useRef<number>(0);
   const [saveTpl, setSaveTpl] = useState(false);
   const [output, setOutput] = useState<{
     payload: PublishPayload;
@@ -94,6 +117,45 @@ function BuilderApp() {
    */
   const [inlineEdit, setInlineEdit] = useState<{ elementId: string; path: string } | null>(null);
 
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      setZoom((z) => clampZoom(z + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [nav, preview]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "SELECT" ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        setZoom((z) => clampZoom(z + ZOOM_STEP));
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        setZoom((z) => clampZoom(z - ZOOM_STEP));
+      } else if (e.key === "0") {
+        e.preventDefault();
+        setZoom(100);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const container = useMemo(
     () => page.containers.find((c) => c.id === sel?.containerId),
     [page.containers, sel],
@@ -106,20 +168,27 @@ function BuilderApp() {
   const setContainers = (fn: (cs: Container[]) => Container[]) =>
     setPage((p) => ({ ...p, containers: fn(p.containers), status: "draft" }));
 
-  const updateContainer = (patch: Partial<Container>) =>
+  const updateContainer = (patch: Partial<Container>) => {
+    if (!sel?.containerId) return;
+    patchContainer(sel.containerId, patch);
+  };
+
+  const patchContainer = (id: string, patch: Partial<Container>) =>
     setContainers((cs) =>
       cs.map((c) => {
-        if (c.id !== sel?.containerId) return c;
+        if (c.id !== id) return c;
         let columns = c.columns;
-        if (patch.layout) {
+        let tracks = patch.tracks ?? c.tracks;
+        if (patch.layout && patch.layout !== c.layout) {
           const target = COLUMN_COUNT[patch.layout];
           columns = Array.from({ length: target }, (_, i) => c.columns[i] ?? []);
           if (c.columns.length > target) {
             const overflow = c.columns.slice(target).flat();
             columns = columns.map((col, i) => (i === target - 1 ? [...col, ...overflow] : col));
           }
+          tracks = defaultTracks(patch.layout);
         }
-        return { ...c, ...patch, columns };
+        return { ...c, ...patch, columns, tracks };
       }),
     );
 
@@ -133,14 +202,16 @@ function BuilderApp() {
               columns: c.columns.map((col, i) =>
                 i !== sel?.colIndex
                   ? col
-                  : col.map((e) => (e.id === sel.elementId ? { ...e, props: { ...e.props, ...patch } } : e)),
+                  : col.map((e) =>
+                      e.id === sel.elementId ? { ...e, props: { ...e.props, ...patch } } : e,
+                    ),
               ),
             },
       ),
     );
 
-  const addContainer = (layout: ContainerLayout) => {
-    const c = newContainer(layout, COLUMN_COUNT[layout]);
+  const addContainer = (layout: ContainerLayout, direction: ContainerDirection = "horizontal") => {
+    const c = newContainer(layout, COLUMN_COUNT[layout], direction);
     setContainers((cs) => {
       const at = cs.findIndex((x) => x.id === sel?.containerId);
       if (at === -1) return [...cs, c];
@@ -192,6 +263,7 @@ function BuilderApp() {
   const deleteContainer = () => {
     setContainers((cs) => cs.filter((c) => c.id !== sel?.containerId));
     setSel(null);
+    toast.success("Container deleted");
   };
 
   const moveElement = (dir: -1 | 1) =>
@@ -229,7 +301,31 @@ function BuilderApp() {
       ),
     );
     setSel(sel ? { ...sel, elementId: null } : null);
+    toast.success("Element deleted");
   };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Backspace" && e.key !== "Delete") return;
+      if (nav !== "build" || preview) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "SELECT" ||
+        target?.isContentEditable ||
+        target?.closest("[role='dialog']")
+      ) {
+        return;
+      }
+      if (!sel?.containerId) return;
+      e.preventDefault();
+      if (sel.elementId) deleteElement();
+      else deleteContainer();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [nav, preview, sel]);
 
   const fireCta = (c: Cta) =>
     toast(`Tracking: ${c.event}`, { description: `${c.action} → ${c.destination || "—"}` });
@@ -359,9 +455,7 @@ function BuilderApp() {
     }
   };
 
-  const targetLabel = container
-    ? `${container.name} · column ${(sel?.colIndex ?? 0) + 1}`
-    : "";
+  const targetLabel = container ? `${container.name} · column ${(sel?.colIndex ?? 0) + 1}` : "";
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-neutral-surface text-foreground">
@@ -379,10 +473,12 @@ function BuilderApp() {
             onClick={() => setNav(n.key)}
             className={cn(
               "flex w-14 flex-col items-center gap-1 rounded-xl py-2 text-[10px] font-medium transition",
-              nav === n.key ? "bg-brand-soft text-brand" : "text-muted-foreground hover:bg-neutral-surface",
+              nav === n.key
+                ? "bg-brand-soft text-brand"
+                : "text-muted-foreground hover:bg-neutral-surface",
             )}
           >
-            <LucideIcon name={n.icon} className="size-4" />
+            <Icon name={n.icon} className="size-4" />
             {n.label}
           </button>
         ))}
@@ -436,13 +532,16 @@ function BuilderApp() {
                   onClick={() => setDevice(d)}
                   className={cn(
                     "rounded-md px-2.5 py-1.5 transition",
-                    device === d ? "bg-background text-brand shadow-panel" : "text-muted-foreground",
+                    device === d
+                      ? "bg-background text-brand shadow-panel"
+                      : "text-muted-foreground",
                   )}
                 >
-                  <LucideIcon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
+                  <Icon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
                 </button>
               ))}
             </div>
+            <ZoomControls zoom={zoom} onChange={setZoom} />
             <button
               type="button"
               onClick={() => setSaveTpl(true)}
@@ -470,7 +569,7 @@ function BuilderApp() {
               className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-neutral-surface"
               title="Inspect the HTML this page publishes as"
             >
-              <LucideIcon name="Code2" className="size-3.5" /> HTML
+              <Icon name="Code2" className="size-3.5" /> HTML
             </button>
             <button
               type="button"
@@ -484,213 +583,315 @@ function BuilderApp() {
         </header>
 
         {nav === "build" ? (
-          <div className="flex min-h-0 flex-1">
-            <aside className="w-72 shrink-0 overflow-hidden border-e border-border bg-background">
-              <ElementsPanel
-                onAddContainer={addContainer}
-                onAddElement={addElement}
-                canAddElement={!!container && sel?.colIndex != null}
-                targetLabel={targetLabel}
-                onDragElement={(type) => setDrag({ kind: "new", type })}
-                onDragEnd={endDrag}
-              />
-            </aside>
-
-            <main className="min-w-0 flex-1 overflow-y-auto p-6">
-              <div
-                className={cn(
-                  // @container makes the element grids below break on THIS
-                  // wrapper's width, so the mobile toggle actually reflows.
-                  "@container mx-auto overflow-hidden rounded-2xl bg-background shadow-card transition-all",
-                  device === "mobile" ? "max-w-sm" : "max-w-none",
-                )}
-                dir={lang === "ar" ? "rtl" : "ltr"}
+          <div className="min-h-0 flex-1">
+            <ResizablePanelGroup id="builder" className="h-full">
+              <ResizablePanel
+                id="elements"
+                defaultSize={288}
+                minSize={200}
+                maxSize={420}
+                collapsible
+                groupResizeBehavior="preserve-pixel-size"
+                className="h-full overflow-hidden bg-background"
               >
-                {page.containers.map((c) => {
-                  const active = sel?.containerId === c.id && !sel.elementId;
-                  return (
+                <div className="h-full overflow-hidden">
+                  <ElementsPanel
+                    onAddContainer={addContainer}
+                    onAddElement={addElement}
+                    canAddElement={!!container && sel?.colIndex != null}
+                    targetLabel={targetLabel}
+                    onDragElement={(type) => setDrag({ kind: "new", type })}
+                    onDragEnd={endDrag}
+                  />
+                </div>
+              </ResizablePanel>
+
+              <ResizableHandle withHandle className="w-1.5 bg-border hover:bg-brand/40" />
+
+              <ResizablePanel id="canvas" minSize={280} className="min-w-0">
+                <div ref={canvasRef} className="h-full min-w-0 overflow-auto p-6">
+                  <ZoomStage zoom={zoom}>
                     <div
-                      key={c.id}
                       className={cn(
-                        "group relative border-2 transition",
-                        active ? "border-brand" : "border-transparent hover:border-brand/30",
+                        // @container makes the element grids below break on THIS
+                        // wrapper's width, so the mobile toggle actually reflows.
+                        // Zoom is a visual scale only — it must not change this width.
+                        "@container/page mx-auto overflow-hidden rounded-2xl bg-background shadow-card transition-[max-width]",
+                        device === "mobile" ? "max-w-sm" : "max-w-none",
                       )}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSel({ containerId: c.id, colIndex: 0, elementId: null });
-                      }}
+                      dir={lang === "ar" ? "rtl" : "ltr"}
                     >
-                      <div
-                        className={cn(
-                          "absolute -top-px start-0 z-20 rounded-be-lg bg-brand px-2 py-0.5 text-[10px] font-semibold text-brand-foreground transition",
-                          active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-                        )}
-                      >
-                        {c.name}
-                      </div>
-                      <ContainerView container={c} lang={lang}>
-                        {(ci) => {
-                          const col = c.columns[ci] ?? [];
-                          const colActive = active && sel?.colIndex === ci;
-                          const colTargeted =
-                            dropSlot?.containerId === c.id && dropSlot.colIndex === ci;
-                          return (
+                      {page.containers.map((c) => {
+                        const active = sel?.containerId === c.id && !sel.elementId;
+                        const inContainer = sel?.containerId === c.id;
+                        const vertical = containerDirection(c.direction) === "vertical";
+                        const tracks = containerTracks(c);
+                        return (
+                          <div
+                            key={c.id}
+                            className={cn(
+                              "group relative border-2 transition",
+                              active ? "border-brand" : "border-transparent hover:border-brand/30",
+                            )}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSel({ containerId: c.id, colIndex: 0, elementId: null });
+                            }}
+                          >
                             <div
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSel({ containerId: c.id, colIndex: ci, elementId: null });
-                              }}
-                              // Dropping anywhere in the column that isn't over an
-                              // element appends to the end.
-                              onDragOver={(e) => {
-                                if (!drag) return;
-                                e.preventDefault();
-                                hoverSlot({ containerId: c.id, colIndex: ci, index: col.length });
-                              }}
-                              onDrop={(e) => {
-                                if (!drag) return;
-                                e.preventDefault();
-                                e.stopPropagation();
-                                completeDrop();
-                              }}
                               className={cn(
-                                "min-h-16 space-y-5 rounded-xl border border-dashed p-2 transition",
-                                drag && colTargeted
-                                  ? "border-brand bg-brand/10"
-                                  : drag
-                                    ? "border-brand/40"
-                                    : colActive
-                                      ? "border-brand bg-brand/5"
-                                      : "border-transparent hover:border-brand/30",
+                                "absolute -top-px start-0 z-20 rounded-be-lg bg-brand px-2 py-0.5 text-[10px] font-semibold text-brand-foreground transition",
+                                active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
                               )}
                             >
-                              {col.length === 0 && (
-                                <div className="flex h-16 items-center justify-center text-[11px] text-muted-foreground">
-                                  {drag
-                                    ? "Drop here"
-                                    : "Empty column — drag an element in, or select this column"}
-                                </div>
-                              )}
-                              {col.map((el, ei) => {
-                                const elActive = sel?.elementId === el.id;
-                                const dragging =
-                                  drag?.kind === "move" && drag.elementId === el.id;
+                              {c.name}
+                            </div>
+                            <ContainerView container={c} lang={lang}>
+                              {(ci) => {
+                                const col = c.columns[ci] ?? [];
+                                const colActive = active && sel?.colIndex === ci;
+                                const colTargeted =
+                                  dropSlot?.containerId === c.id && dropSlot.colIndex === ci;
                                 return (
                                   <div
-                                    key={el.id}
-                                    // A draggable ancestor hijacks text selection,
-                                    // so dragging is off while editing in place.
-                                    draggable={inlineEdit?.elementId !== el.id}
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      setSel({ containerId: c.id, colIndex: ci, elementId: el.id });
+                                      setSel({ containerId: c.id, colIndex: ci, elementId: null });
                                     }}
-                                    onDragStart={(e) => {
-                                      // Firefox refuses to start a drag without payload.
-                                      e.dataTransfer.setData("text/plain", el.id);
-                                      e.dataTransfer.effectAllowed = "move";
-                                      setDrag({
-                                        kind: "move",
-                                        containerId: c.id,
-                                        colIndex: ci,
-                                        elementId: el.id,
-                                      });
-                                    }}
-                                    onDragEnd={endDrag}
+                                    // Dropping anywhere in the column that isn't over an
+                                    // element appends to the end.
                                     onDragOver={(e) => {
                                       if (!drag) return;
                                       e.preventDefault();
+                                      hoverSlot({
+                                        containerId: c.id,
+                                        colIndex: ci,
+                                        index: col.length,
+                                      });
+                                    }}
+                                    onDrop={(e) => {
+                                      if (!drag) return;
+                                      e.preventDefault();
                                       e.stopPropagation();
-                                      slotFromPointer(e, c.id, ci, ei);
+                                      completeDrop();
                                     }}
                                     className={cn(
-                                      "relative cursor-grab rounded-lg outline-offset-4 transition active:cursor-grabbing",
-                                      dragging && "opacity-40",
-                                      elActive
-                                        ? "outline-2 outline-brand"
-                                        : "hover:outline-2 hover:outline-brand/30",
+                                      "relative h-full min-h-16 space-y-5 rounded-xl border border-dashed p-2 transition",
+                                      drag && colTargeted
+                                        ? "border-brand bg-brand/10"
+                                        : drag
+                                          ? "border-brand/40"
+                                          : colActive
+                                            ? "border-brand bg-brand/5"
+                                            : "border-transparent hover:border-brand/30",
                                     )}
                                   >
-                                    {/* Insertion indicators, absolutely positioned so
+                                    {col.length === 0 && (
+                                      <div className="flex h-16 items-center justify-center text-[11px] text-muted-foreground">
+                                        {drag
+                                          ? "Drop here"
+                                          : "Empty column — drag an element in, or select this column"}
+                                      </div>
+                                    )}
+                                    {col.map((el, ei) => {
+                                      const elActive = sel?.elementId === el.id;
+                                      const dragging =
+                                        drag?.kind === "move" && drag.elementId === el.id;
+                                      return (
+                                        <div
+                                          key={el.id}
+                                          // A draggable ancestor hijacks text selection,
+                                          // so dragging is off while editing in place.
+                                          draggable={inlineEdit?.elementId !== el.id}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSel({
+                                              containerId: c.id,
+                                              colIndex: ci,
+                                              elementId: el.id,
+                                            });
+                                          }}
+                                          onDragStart={(e) => {
+                                            // Firefox refuses to start a drag without payload.
+                                            e.dataTransfer.setData("text/plain", el.id);
+                                            e.dataTransfer.effectAllowed = "move";
+                                            setDrag({
+                                              kind: "move",
+                                              containerId: c.id,
+                                              colIndex: ci,
+                                              elementId: el.id,
+                                            });
+                                          }}
+                                          onDragEnd={endDrag}
+                                          onDragOver={(e) => {
+                                            if (!drag) return;
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            slotFromPointer(e, c.id, ci, ei);
+                                          }}
+                                          className={cn(
+                                            "relative cursor-grab rounded-lg outline-offset-4 transition active:cursor-grabbing",
+                                            dragging && "opacity-40",
+                                            elActive
+                                              ? "outline-2 outline-brand"
+                                              : "hover:outline-2 hover:outline-brand/30",
+                                          )}
+                                        >
+                                          {/* Insertion indicators, absolutely positioned so
                                         the column doesn't reflow mid-drag. */}
-                                    {isSlot(c.id, ci, ei) && (
-                                      <span className="absolute inset-x-0 -top-3 z-20 h-1 rounded-full bg-brand" />
-                                    )}
-                                    {isSlot(c.id, ci, ei + 1) && (
-                                      <span className="absolute inset-x-0 -bottom-3 z-20 h-1 rounded-full bg-brand" />
-                                    )}
-                                    <span
-                                      className={cn(
-                                        "absolute -start-1 -top-1 z-20 flex size-5 items-center justify-center rounded-md bg-brand text-brand-foreground transition",
-                                        elActive ? "opacity-100" : "opacity-0 hover:opacity-100",
-                                      )}
-                                      title="Drag to reorder"
-                                    >
-                                      <LucideIcon name="GripVertical" className="size-3" />
-                                    </span>
-                                    <ElementView
-                                      el={el}
-                                      lang={lang}
-                                      editing
-                                      onFire={fireCta}
-                                      onEditText={(path, value) =>
-                                        editText(c.id, ci, el.id, path, value)
-                                      }
-                                      editingPath={
-                                        inlineEdit?.elementId === el.id ? inlineEdit.path : null
-                                      }
-                                      onStartEdit={(path) =>
-                                        setInlineEdit({ elementId: el.id, path })
-                                      }
-                                      onStopEdit={() => setInlineEdit(null)}
-                                    />
+                                          {isSlot(c.id, ci, ei) && (
+                                            <span className="absolute inset-x-0 -top-3 z-20 h-1 rounded-full bg-brand" />
+                                          )}
+                                          {isSlot(c.id, ci, ei + 1) && (
+                                            <span className="absolute inset-x-0 -bottom-3 z-20 h-1 rounded-full bg-brand" />
+                                          )}
+                                          <span
+                                            className={cn(
+                                              "absolute -start-1 -top-1 z-20 flex size-5 items-center justify-center rounded-md bg-brand text-brand-foreground transition",
+                                              elActive
+                                                ? "opacity-100"
+                                                : "opacity-0 hover:opacity-100",
+                                            )}
+                                            title="Drag to reorder"
+                                          >
+                                            <Icon name="GripVertical" className="size-3" />
+                                          </span>
+                                          <ElementView
+                                            el={el}
+                                            lang={lang}
+                                            editing
+                                            onFire={fireCta}
+                                            onEditText={(path, value) =>
+                                              editText(c.id, ci, el.id, path, value)
+                                            }
+                                            editingPath={
+                                              inlineEdit?.elementId === el.id
+                                                ? inlineEdit.path
+                                                : null
+                                            }
+                                            onStartEdit={(path) =>
+                                              setInlineEdit({ elementId: el.id, path })
+                                            }
+                                            onStopEdit={() => setInlineEdit(null)}
+                                          />
+                                          {elActive &&
+                                          (el.type === "image" || el.type === "spacer") ? (
+                                            <BoxResizeFrame
+                                              onStart={() => {
+                                                heightDrag.current =
+                                                  Number(el.props["height"]) ||
+                                                  (el.type === "image" ? 320 : 40);
+                                              }}
+                                              onMove={(deltaHeight) => {
+                                                const min = el.type === "image" ? 80 : 8;
+                                                const max = el.type === "image" ? 800 : 240;
+                                                const next = Math.round(
+                                                  Math.min(
+                                                    max,
+                                                    Math.max(min, heightDrag.current + deltaHeight),
+                                                  ),
+                                                );
+                                                updateElement({ height: next });
+                                              }}
+                                            />
+                                          ) : null}
+                                        </div>
+                                      );
+                                    })}
+                                    {ci < tracks.length - 1 ? (
+                                      <EdgeResizeHandle
+                                        axis={vertical ? "y" : "x"}
+                                        rtl={lang === "ar"}
+                                        visible={inContainer}
+                                        label={vertical ? "Resize row" : "Resize column"}
+                                        onStart={() => {
+                                          trackDrag.current = {
+                                            id: c.id,
+                                            tracks: containerTracks(c),
+                                          };
+                                        }}
+                                        onMove={(deltaPx, spanPx) => {
+                                          const snap = trackDrag.current;
+                                          if (!snap || snap.id !== c.id) return;
+                                          patchContainer(c.id, {
+                                            tracks: nudgeTracks(snap.tracks, ci, deltaPx / spanPx),
+                                          });
+                                        }}
+                                        onEnd={() => {
+                                          trackDrag.current = null;
+                                        }}
+                                      />
+                                    ) : null}
                                   </div>
                                 );
-                              })}
-                            </div>
-                          );
-                        }}
-                      </ContainerView>
+                              }}
+                            </ContainerView>
+                            {active ? (
+                              <BoxResizeFrame
+                                onStart={(host) => {
+                                  heightDrag.current = c.minHeight || host.offsetHeight;
+                                }}
+                                onMove={(deltaHeight) => {
+                                  const next = Math.round(
+                                    Math.min(1200, Math.max(80, heightDrag.current + deltaHeight)),
+                                  );
+                                  patchContainer(c.id, { minHeight: next });
+                                }}
+                              />
+                            ) : null}
+                          </div>
+                        );
+                      })}
+
+                      <button
+                        type="button"
+                        onClick={() => addContainer("1")}
+                        className="flex w-full items-center justify-center gap-2 border-t border-dashed border-border py-6 text-xs font-medium text-muted-foreground hover:bg-brand-soft/50 hover:text-brand"
+                      >
+                        <Icon name="Plus" className="size-4" /> Add container
+                      </button>
                     </div>
-                  );
-                })}
-
-                <button
-                  type="button"
-                  onClick={() => addContainer("1")}
-                  className="flex w-full items-center justify-center gap-2 border-t border-dashed border-border py-6 text-xs font-medium text-muted-foreground hover:bg-brand-soft/50 hover:text-brand"
-                >
-                  <LucideIcon name="Plus" className="size-4" /> Add container
-                </button>
-              </div>
-            </main>
-
-            <aside className="w-80 shrink-0 overflow-hidden border-s border-border bg-background">
-              <div className="flex h-full flex-col">
-                <div className="min-h-0 flex-1 overflow-y-auto">
-                  <PropertiesPanel
-                    container={container}
-                    element={element}
-                    lang={lang}
-                    updateContainer={updateContainer}
-                    updateElement={updateElement}
-                    onDeleteElement={deleteElement}
-                    onMoveElement={moveElement}
-                    onDuplicateContainer={duplicateContainer}
-                    onDeleteContainer={deleteContainer}
-                    onMoveContainer={moveContainer}
-                  />
+                  </ZoomStage>
                 </div>
-                <div className="max-h-[45%] shrink-0 overflow-y-auto border-t border-border bg-neutral-surface/40">
-                  <PageSettingsPanel
-                    page={page}
-                    lang={lang}
-                    setLang={setLang}
-                    onChange={(patch) => setPage((p) => ({ ...p, ...patch }))}
-                  />
+              </ResizablePanel>
+
+              <ResizableHandle withHandle className="w-1.5 bg-border hover:bg-brand/40" />
+
+              <ResizablePanel
+                id="properties"
+                defaultSize={320}
+                minSize={240}
+                maxSize={480}
+                collapsible
+                groupResizeBehavior="preserve-pixel-size"
+                className="h-full overflow-hidden bg-background"
+              >
+                <div className="flex h-full flex-col">
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    <PropertiesPanel
+                      container={container}
+                      element={element}
+                      lang={lang}
+                      updateContainer={updateContainer}
+                      updateElement={updateElement}
+                      onDeleteElement={deleteElement}
+                      onMoveElement={moveElement}
+                      onDuplicateContainer={duplicateContainer}
+                      onDeleteContainer={deleteContainer}
+                      onMoveContainer={moveContainer}
+                    />
+                  </div>
+                  <div className="max-h-[45%] shrink-0 overflow-y-auto border-t border-border bg-neutral-surface/40">
+                    <PageSettingsPanel
+                      page={page}
+                      lang={lang}
+                      setLang={setLang}
+                      onChange={(patch) => setPage((p) => ({ ...p, ...patch }))}
+                    />
+                  </div>
                 </div>
-              </div>
-            </aside>
+              </ResizablePanel>
+            </ResizablePanelGroup>
           </div>
         ) : nav === "templates" ? (
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -731,7 +932,10 @@ function BuilderApp() {
         <div className="fixed inset-0 z-50 flex flex-col bg-neutral-900/60">
           <div className="flex h-14 items-center justify-between bg-background px-4">
             <div className="text-sm font-semibold">
-              Preview · <span className="font-normal text-muted-foreground">q84sale.com/{lang}/{page.slug}</span>
+              Preview ·{" "}
+              <span className="font-normal text-muted-foreground">
+                q84sale.com/{lang}/{page.slug}
+              </span>
             </div>
             <div className="flex items-center gap-2">
               <div className="flex rounded-lg bg-neutral-surface p-1">
@@ -742,7 +946,9 @@ function BuilderApp() {
                     onClick={() => setLang(l)}
                     className={cn(
                       "rounded-md px-3 py-1 text-xs font-semibold uppercase",
-                      lang === l ? "bg-background text-brand shadow-panel" : "text-muted-foreground",
+                      lang === l
+                        ? "bg-background text-brand shadow-panel"
+                        : "text-muted-foreground",
                     )}
                   >
                     {l}
@@ -757,13 +963,16 @@ function BuilderApp() {
                     onClick={() => setDevice(d)}
                     className={cn(
                       "rounded-md px-2.5 py-1.5",
-                      device === d ? "bg-background text-brand shadow-panel" : "text-muted-foreground",
+                      device === d
+                        ? "bg-background text-brand shadow-panel"
+                        : "text-muted-foreground",
                     )}
                   >
-                    <LucideIcon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
+                    <Icon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
                   </button>
                 ))}
               </div>
+              <ZoomControls zoom={zoom} onChange={setZoom} />
               <button
                 type="button"
                 onClick={() => setPreview(false)}
@@ -774,16 +983,18 @@ function BuilderApp() {
             </div>
           </div>
           <div className="flex-1 overflow-y-auto bg-neutral-surface p-4">
-            <div
-              className={cn(
-                "@container mx-auto overflow-hidden rounded-2xl bg-background shadow-lift",
-                device === "mobile" ? "max-w-sm" : "max-w-none",
-              )}
-            >
-              <SiteChrome lang={lang} />
-              <PageRenderer containers={page.containers} lang={lang} onFire={fireCta} />
-              <SiteFooter lang={lang} />
-            </div>
+            <ZoomStage zoom={zoom}>
+              <div
+                className={cn(
+                  "@container/page mx-auto overflow-hidden rounded-2xl bg-background shadow-lift",
+                  device === "mobile" ? "max-w-sm" : "max-w-none",
+                )}
+              >
+                <SiteChrome lang={lang} />
+                <PageRenderer containers={page.containers} lang={lang} onFire={fireCta} />
+                <SiteFooter lang={lang} />
+              </div>
+            </ZoomStage>
           </div>
         </div>
       )}
@@ -812,6 +1023,83 @@ function BuilderApp() {
   );
 }
 
+function ZoomControls({ zoom, onChange }: { zoom: number; onChange: (z: number) => void }) {
+  return (
+    <div className="flex items-center rounded-lg bg-neutral-surface p-1">
+      <button
+        type="button"
+        onClick={() => onChange(clampZoom(zoom - ZOOM_STEP))}
+        disabled={zoom <= ZOOM_MIN}
+        className="rounded-md px-1.5 py-1.5 text-muted-foreground transition hover:bg-background hover:text-brand disabled:opacity-40"
+        title="Zoom out"
+      >
+        <Icon name="Minus" className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange(100)}
+        className="min-w-12 px-1 text-center text-[11px] font-semibold tabular-nums text-foreground"
+        title="Reset zoom"
+      >
+        {zoom}%
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange(clampZoom(zoom + ZOOM_STEP))}
+        disabled={zoom >= ZOOM_MAX}
+        className="rounded-md px-1.5 py-1.5 text-muted-foreground transition hover:bg-background hover:text-brand disabled:opacity-40"
+        title="Zoom in"
+      >
+        <Icon name="Plus" className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Scales the artboard visually without changing its layout width, so container
+ * queries and the Desktop/Mobile toggle keep working. The wrapper's height is
+ * the scaled height so the parent can scroll instead of leaving empty space.
+ */
+function ZoomStage({ zoom, children }: { zoom: number; children: ReactNode }) {
+  const innerRef = useRef<HTMLDivElement>(null);
+  const [naturalH, setNaturalH] = useState(0);
+  const scale = zoom / 100;
+  const grow = Math.max(scale, 1);
+
+  useLayoutEffect(() => {
+    const el = innerRef.current;
+    if (!el) return;
+    const update = () => setNaturalH(el.offsetHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [zoom]);
+
+  return (
+    <div className="flex justify-center" style={{ minWidth: "100%" }}>
+      <div
+        style={{
+          width: `${grow * 100}%`,
+          ...(naturalH > 0 ? { height: naturalH * scale } : {}),
+        }}
+      >
+        <div
+          ref={innerRef}
+          style={{
+            width: `${100 / grow}%`,
+            transform: `scale(${scale})`,
+            transformOrigin: "top center",
+          }}
+        >
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SiteChrome({ lang }: { lang: Lang }) {
   const links =
     lang === "ar"
@@ -831,7 +1119,9 @@ function SiteChrome({ lang }: { lang: Lang }) {
           </nav>
         </div>
         <div className="flex items-center gap-2 text-xs font-semibold">
-          <span className="rounded-lg border border-border px-3 py-1.5">{lang === "ar" ? "English" : "العربية"}</span>
+          <span className="rounded-lg border border-border px-3 py-1.5">
+            {lang === "ar" ? "English" : "العربية"}
+          </span>
           <span className="rounded-lg bg-brand px-3 py-1.5 text-brand-foreground">
             {lang === "ar" ? "أضف إعلانك" : "Post an ad"}
           </span>
@@ -843,7 +1133,10 @@ function SiteChrome({ lang }: { lang: Lang }) {
 
 function SiteFooter({ lang }: { lang: Lang }) {
   return (
-    <footer dir={lang === "ar" ? "rtl" : "ltr"} className="border-t border-border bg-neutral-surface">
+    <footer
+      dir={lang === "ar" ? "rtl" : "ltr"}
+      className="border-t border-border bg-neutral-surface"
+    >
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-6 text-xs text-muted-foreground">
         <span>© {new Date().getFullYear()} 4Sale — q84sale.com</span>
         <span>{t({ en: "Terms · Privacy · Help", ar: "الشروط · الخصوصية · المساعدة" }, lang)}</span>

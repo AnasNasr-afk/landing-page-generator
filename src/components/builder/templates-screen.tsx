@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { type Template } from "@/lib/builder-types";
-import { LucideIcon } from "./renderer";
+import { containerDirection, type Template } from "@/lib/builder-types";
+import { cn } from "@/lib/utils";
+import { UiIcon as Icon } from "./ui-icon";
 import { Field, Pill, TextArea, TextInput } from "./controls";
 
 export function TemplatesScreen({
@@ -31,7 +32,7 @@ export function TemplatesScreen({
           className="flex min-h-52 flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-border bg-background p-6 transition hover:border-brand hover:bg-brand-soft/40"
         >
           <div className="flex size-12 items-center justify-center rounded-xl bg-brand-soft text-brand">
-            <LucideIcon name="Plus" className="size-5" />
+            <Icon name="Plus" className="size-5" />
           </div>
           <div className="text-center">
             <p className="text-sm font-semibold">Start from blank canvas</p>
@@ -46,7 +47,11 @@ export function TemplatesScreen({
           >
             <div className="flex-1 space-y-1.5 bg-neutral-surface p-4">
               {tpl.containers.slice(0, 5).map((c) => (
-                <div key={c.id} className="flex gap-1.5" style={{ height: Math.max(8, c.paddingY / 6) }}>
+                <div
+                  key={c.id}
+                  className={cn("flex gap-1.5", containerDirection(c.direction) === "vertical" && "flex-col")}
+                  style={{ height: Math.max(8, c.paddingY / 6) }}
+                >
                   {c.columns.map((_, i) => (
                     <div
                       key={i}
@@ -79,7 +84,7 @@ export function TemplatesScreen({
                     onClick={() => onDelete(tpl.id)}
                     className="rounded-lg border border-border p-2 text-muted-foreground hover:border-destructive hover:text-destructive"
                   >
-                    <LucideIcon name="Trash2" className="size-3.5" />
+                    <Icon name="Trash2" className="size-3.5" />
                   </button>
                 )}
               </div>
@@ -167,13 +172,13 @@ export function AssetsScreen() {
       </header>
       <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-4">
         <div className="flex aspect-4/3 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-border text-muted-foreground">
-          <LucideIcon name="UploadCloud" className="size-5" />
+          <Icon name="UploadCloud" className="size-5" />
           <span className="text-xs font-medium">Upload asset</span>
         </div>
         {assets.map((a) => (
           <div key={a} className="overflow-hidden rounded-2xl border border-border bg-background">
             <div className="flex aspect-4/3 items-center justify-center bg-neutral-surface text-muted-foreground">
-              <LucideIcon name="Image" className="size-6" />
+              <Icon name="Image" className="size-6" />
             </div>
             <div className="p-3 text-xs font-medium">{a}</div>
           </div>

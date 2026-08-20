@@ -1,26 +1,40 @@
-import type { LText } from "./builder-types";
+import { type Lang, type LText, t } from "./builder-types";
 
 /**
  * The 4Sale catalogue and listings API.
  *
- * The listings block needs two things: the category tree, fetched **one level at
- * a time** because the editor drills into it (Cars → Toyota → Land Cruiser →
- * …), and the listings that match whatever branch they landed on.
+ * Atlas endpoints:
+ *
+ * - `GET /admin/categories/verticals` — the top-level categories.
+ * - `GET /admin/categories/{id}/children` — one level down. The editor drills
+ *   (Automotive → Used Cars → BMW → 5 Series), and `has_children` says when to
+ *   stop, so a leaf costs no request.
+ * - `GET /search?q=&page=&limit=` — keyword search. **Keyword only.** Its
+ *   `category_id` parameter triggers Atlas's V4 `advancedSearch` path, which
+ *   502s / times out without a credential we do not send. `limit` caps at 50.
+ * - `GET /categories/{id}/attributes` — the **full inherited** attribute schema.
+ *   On the 5 Series leaf this returns all 43 Used Cars attributes, which is
+ *   what lets a card's specification line be built from the listing's own
+ *   `cat_id` with no walk up the tree.
+ * - `GET /categories/{id}/attributes/with-parent` — despite the name, the
+ *   **opposite**: only the attributes the leaf defines itself (the 5 Series
+ *   returns exactly one, Model). `fetchFilters` uses this one and merges along
+ *   the selected path to compensate, which is why it makes a request per level.
+ *   It could likely be a single `/attributes` call instead — untested, so it is
+ *   recorded here rather than changed.
  *
  * Everything the builder touches goes through the narrow `Category` / `Listing`
- * shapes below. 4Sale's own payloads are read in `readCategory` / `readListing`
- * and nowhere else, so pointing this at the real service is a change to two
- * functions rather than a change to the panel, the modal and the renderer.
+ * shapes below, read in `readCategory` / `readSearchListing` and nowhere else,
+ * so a change to 4Sale's payloads is a change to two functions rather than to
+ * the panel, the modal and the renderer.
  *
- * With no base URL configured the module serves a small mock tree, so the block
- * is demonstrable with no backend running — the state the rest of this
- * prototype is in. Set `VITE_LISTINGS_API` to go live.
+ * Live by default — the service is public and CORS-open, so no proxy and no key
+ * are involved.
  */
-
-const BASE = ((import.meta.env["VITE_LISTINGS_API"] as string | undefined) ?? "").replace(
-  /\/$/,
-  "",
-);
+const BASE = (
+  (import.meta.env["VITE_LISTINGS_API"] as string | undefined) ??
+  "https://services.q84sale.com/api/v1/atlas-service"
+).replace(/\/$/, "");
 
 /** True when a real service is configured; drives the panel's "mocked" hint. */
 export const isLiveCatalogue = () => BASE !== "";
@@ -31,16 +45,65 @@ export type Category = {
   name: LText;
   /** Whether drilling in is possible — decides if another dropdown appears. */
   hasChildren: boolean;
+  /** `display_order` from the service. Ties are common, so name breaks them. */
+  order: number;
 };
 
 export type Listing = {
   id: string;
   title: LText;
-  price: string;
+  /** Formatted and currency-suffixed, e.g. "1,600 KWD" / "1,600 د.ك". */
+  price: LText;
   area: LText;
   tag?: string | undefined;
   image?: string | undefined;
   url?: string | undefined;
+  /** Leaf category id, in the same id space as the category tree. */
+  catId?: string | undefined;
+  /**
+   * The grey line under the title — "2024, 80 K Km, Gray".
+   *
+   * Composed from `attrs` (attribute id → option id) resolved against the
+   * category's attribute schema, which is where the labels live. Absent when
+   * the schema request failed or the listing carries no recognised attributes,
+   * and the card then closes the gap rather than reserving an empty row.
+   */
+  specs?: LText | undefined;
+  /**
+   * Relative age, e.g. "Since 3 Hour".
+   *
+   * Computed at read time from `date_sort` (the bump date the real site sorts
+   * on, not `date_published`). A published page bakes this string in, so it
+   * ages — see the note on `formatSince`.
+   */
+  since?: LText | undefined;
+  /** Drives the Call and WhatsApp buttons. Digits only, no `+`. */
+  phone?: string | undefined;
+  /** `is_pm_enabled` — whether the seller accepts in-app chat. */
+  chat?: boolean | undefined;
+  /**
+   * The photos the card's carousel pages through.
+   *
+   * Deliberately **not** driven by `images_count`. The real card paginates the
+   * `thumbs` array — which the search endpoint caps at 2 — and appends one
+   * "See more" slide, so a listing with 9 photos still shows 3 dots. Counting
+   * `images_count` instead is what gave our cards 5 and 6 dots.
+   */
+  thumbs?: string[] | undefined;
+  /** Seller avatar, shown as the circle at the photo's bottom-end corner. */
+  vendorLogo?: string | undefined;
+  /**
+   * `is_verified` — a verified seller. Gates the avatar entirely: the real card
+   * renders no avatar at all for an unverified seller, even when a logo exists.
+   */
+  verified?: boolean | undefined;
+  /**
+   * `is_prem` — a promoted listing, and the only thing that earns the gold
+   * crown "Featured" pill. Not `plan_id`, which nearly every listing has.
+   */
+  featured?: boolean | undefined;
+  /** `status === "pinned"` — its own tag, and it replaces the date with "Pinned today". */
+  pinned?: boolean | undefined;
 };
 
 /** A selected branch, root first. The last entry is what gets queried. */
@@ -53,21 +116,24 @@ type FilterBase = {
   label: LText;
   /** Secondary fields start collapsed behind "More filters". */
   primary: boolean;
+  /** Atlas `sys_name`, used to lift Price out of the generic attribute list. */
+  sysName: string;
 };
 
 /**
  * One filter control, described by the server rather than hardcoded here.
  *
  * Which filters exist depends entirely on the category — a car has a year and a
- * gearbox, an apartment has bedrooms and a floor area — so the panel renders
- * whatever `fetchFilters` returns instead of switching on the category itself.
+ * gearbox, a phone has storage and RAM — so the panel renders whatever
+ * `fetchFilters` returns instead of switching on the category itself.
  */
 export type FilterField =
   | (FilterBase & { kind: "multi"; options: FilterOption[] })
   | (FilterBase & { kind: "range"; min: number; max: number; step: number; unit: LText })
   | (FilterBase & { kind: "toggle" });
 
-export type RangeValue = { min: number; max: number };
+/** Either bound may be omitted — Atlas number attributes have no min/max. */
+export type RangeValue = { min?: number | undefined; max?: number | undefined };
 
 /** `string[]` for multi, `{min,max}` for range, `true` for an enabled toggle. */
 export type FilterValue = string[] | RangeValue | boolean;
@@ -85,6 +151,10 @@ const num = (v: unknown, fallback: number): number => {
   const n = typeof v === "number" ? v : Number(str(v));
   return Number.isFinite(n) ? n : fallback;
 };
+
+/** Narrows anything to a plain object, so a missing branch reads as empty. */
+const obj = (v: unknown): Record<string, unknown> =>
+  v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 
 /**
  * Reads a bilingual name out of a payload.
@@ -107,67 +177,43 @@ function readCategory(v: unknown): Category {
   const o = (v ?? {}) as Record<string, unknown>;
   const children = o["children"];
   return {
+    // Atlas ids are numbers; `str` normalises them, and the same id is what a
+    // listing carries as `cat_id`, which is how the two endpoints join up.
     id: str(o["id"]) || str(o["slug"]),
-    name: readLText(o["name"], o["name_ar"]),
+    name: readLText(o["name_en"] ?? o["name"], o["name_ar"]),
     hasChildren:
       o["hasChildren"] === true ||
       o["has_children"] === true ||
       (Array.isArray(children) && children.length > 0),
+    order: num(o["display_order"], 0),
   };
 }
 
 function readListing(v: unknown): Listing {
   const o = (v ?? {}) as Record<string, unknown>;
+  const specs = o["specs"] ? readLText(o["specs"]) : undefined;
+  const since = o["since"] ? readLText(o["since"]) : undefined;
   return {
     id: str(o["id"]),
     title: readLText(o["title"], o["title_ar"]),
-    price: str(o["price"]),
+    price: readLText(o["price"]),
     area: readLText(o["area"], o["area_ar"]),
     tag: str(o["tag"]) || undefined,
     image: str(o["image"]) || undefined,
     url: str(o["url"]) || undefined,
+    // Every card field is persisted onto the element and re-read here, so the
+    // canvas and the published page render from one cached search rather than
+    // each re-querying and possibly disagreeing.
+    specs: specs && (specs.en || specs.ar) ? specs : undefined,
+    since: since && (since.en || since.ar) ? since : undefined,
+    phone: str(o["phone"]) || undefined,
+    chat: o["chat"] === true || undefined,
+    thumbs: Array.isArray(o["thumbs"]) ? o["thumbs"].map(str).filter(Boolean) : undefined,
+    vendorLogo: str(o["vendorLogo"]) || undefined,
+    verified: o["verified"] === true || undefined,
+    featured: o["featured"] === true || undefined,
+    pinned: o["pinned"] === true || undefined,
   };
-}
-
-/**
- * Reads a filter definition, defaulting to a multi-select.
- *
- * An unrecognised `kind` becomes a checkbox list of whatever options came with
- * it, which degrades to an empty group rather than crashing the panel when the
- * service grows a control this build has never heard of.
- */
-function readFilterField(v: unknown): FilterField | null {
-  const o = (v ?? {}) as Record<string, unknown>;
-  const id = str(o["id"]) || str(o["key"]);
-  if (!id) return null;
-
-  const base: FilterBase = {
-    id,
-    label: readLText(o["label"] ?? o["name"], o["label_ar"] ?? o["name_ar"]),
-    primary: o["primary"] !== false,
-  };
-  const kind = str(o["kind"]) || str(o["type"]);
-
-  if (kind === "toggle" || kind === "boolean") return { ...base, kind: "toggle" };
-
-  if (kind === "range") {
-    return {
-      ...base,
-      kind: "range",
-      min: num(o["min"], 0),
-      max: num(o["max"], 100),
-      step: num(o["step"], 1),
-      unit: readLText(o["unit"], o["unit_ar"]),
-    };
-  }
-
-  const options = readArray(o["options"] ?? o["values"]).flatMap((raw) => {
-    const opt = (raw ?? {}) as Record<string, unknown>;
-    const optId = str(opt["id"]) || str(opt["value"]);
-    if (!optId) return [];
-    return [{ id: optId, label: readLText(opt["label"] ?? opt["name"], opt["label_ar"]) }];
-  });
-  return { ...base, kind: "multi", options };
 }
 
 /** Turns a failed response into an Error carrying the server's own message. */
@@ -207,78 +253,591 @@ function readArray(v: unknown): unknown[] {
  * non-empty and stops.
  */
 export async function fetchCategories(parentId?: string): Promise<Category[]> {
-  if (!isLiveCatalogue()) return mockCategories(parentId);
+  // The top level is a separate route rather than "children of nothing".
+  const path = parentId
+    ? `/admin/categories/${encodeURIComponent(parentId)}/children`
+    : `/admin/categories/verticals`;
 
-  const path = parentId ? `/categories/${encodeURIComponent(parentId)}/children` : `/categories`;
-  return readArray(await getJson(path))
-    .map(readCategory)
-    .filter((c) => c.id !== "");
+  return (
+    readArray(await getJson(path))
+      .map(readCategory)
+      .filter((c) => c.id !== "")
+      // `display_order` ties are common — Camping and Sports are both 60, Jobs and
+      // Education both 110 — so the name settles it and the order stays stable.
+      .sort((a, b) => a.order - b.order || a.name.en.localeCompare(b.name.en))
+  );
+}
+
+/** How many extra dropdowns stay open before "More filters". */
+const PRIMARY_DROPDOWNS = 4;
+
+/**
+ * The filters available for a category.
+ *
+ * Facets are a property of the category, not of the site: mobiles are filtered
+ * by storage, cars by year and body type. `with-parent` also returns attributes
+ * inherited from ancestors, so a leaf like iPhone still gets Condition.
+ *
+ * Search still takes only a keyword, so these ids are saved for publish rather
+ * than sent with `/search`. A model leaf is often empty — iPhone 17 has no
+ * attributes of its own — so every id on the selected path is fetched and
+ * merged (Mobile Phones `99` supplies Storage, RAM, Condition).
+ */
+export async function fetchFilters(path: CategoryPath): Promise<FilterField[]> {
+  if (path.length === 0) return [];
+
+  const payloads = await Promise.all(
+    path.map((node) =>
+      getJson(`/categories/${encodeURIComponent(node.id)}/attributes/with-parent`).catch(() => ({
+        data: { attributes: [] },
+      })),
+    ),
+  );
+
+  // Root first, leaf last: a more specific node overwrites the same attr_id,
+  // while parent-only fields such as Condition on `99` are kept.
+  const merged = new Map<string, unknown>();
+  for (const json of payloads) {
+    for (const raw of readAttributes(json)) {
+      const id = str(obj(raw)["attr_id"]);
+      if (id) merged.set(id, raw);
+    }
+  }
+
+  const ranked = [...merged.values()]
+    .flatMap((raw) => {
+      const o = obj(raw);
+      const field = readAttribute(raw);
+      return field
+        ? [{ field, order: num(o["display_order"], 0), pin: isPrimaryAttribute(o) }]
+        : [];
+    })
+    .sort((a, b) => a.order - b.order);
+
+  let dropdowns = 0;
+  return ranked.map(({ field, pin }) => {
+    if (pin) return { ...field, primary: true };
+    if (field.kind === "multi" && dropdowns < PRIMARY_DROPDOWNS) {
+      dropdowns += 1;
+      return { ...field, primary: true };
+    }
+    return field;
+  });
 }
 
 /**
- * The filters available for a branch.
- *
- * Facets are a property of the category, not of the site: mobiles are filtered
- * by storage capacity, cars by year and mileage. Asking the server which
- * controls to draw is what keeps the block from carrying a hardcoded list that
- * goes stale the moment 4Sale adds a facet.
- *
- * Filters hang off the deepest selected category and fall back up the branch,
- * so picking Electronics alone still offers condition and price.
+ * Price, mileage and year are the filters people actually reach for, even when
+ * Atlas marks Price `show_in_plf: false` (it is a listing field, not a
+ * category-form field). Required dropdowns such as year get the same treatment.
  */
-export async function fetchFilters(path: CategoryPath): Promise<FilterField[]> {
-  if (!isLiveCatalogue()) return mockFilters(path);
+function isPrimaryAttribute(o: Record<string, unknown>): boolean {
+  const sys = str(o["sys_name"]).toLowerCase();
+  if (sys === "price" || sys.includes("mileage") || sys === "year") return true;
+  return o["required"] === true && str(o["type"]) === "drop_down";
+}
 
-  const leaf = path[path.length - 1];
-  if (!leaf) return [];
-  return readArray(await getJson(`/categories/${encodeURIComponent(leaf.id)}/filters`)).flatMap(
-    (raw) => {
-      const field = readFilterField(raw);
-      return field ? [field] : [];
-    },
-  );
+/** Atlas nests the list under `data.attributes`, not a bare `data` array. */
+function readAttributes(json: unknown): unknown[] {
+  const root = obj(json);
+  const data = obj(root["data"]);
+  const attrs = data["attributes"] ?? root["attributes"];
+  return Array.isArray(attrs) ? attrs : [];
+}
+
+/**
+ * One Atlas attribute mapped onto a filter control.
+ *
+ * `show_in_plf` is ignored: Price and several other listing filters are flagged
+ * false because they live on the listing itself, not the category form. Every
+ * renderable type becomes a control — `drop_down` a checkbox list, `bool` a
+ * toggle, `number` an open From/To pair (the payload has no min/max). `file` is
+ * an upload, not a facet, so it is skipped.
+ */
+function readAttribute(v: unknown): FilterField | null {
+  const o = obj(v);
+  const id = str(o["attr_id"]);
+  if (!id) return null;
+
+  const sys = str(o["sys_name"]);
+  const en = str(o["label_en"]) || sys || id;
+  const base: FilterBase = {
+    id,
+    label: { en, ar: str(o["label_ar"]) || en },
+    primary: false,
+    sysName: sys,
+  };
+
+  const type = str(o["type"]);
+  if (type === "file") return null;
+  if (type === "bool") return { ...base, kind: "toggle" };
+  if (type === "number") {
+    return { ...base, kind: "range", min: 0, max: 0, step: 1, unit: unitFor(sys) };
+  }
+  if (type !== "drop_down") return null;
+
+  const options = (Array.isArray(o["options"]) ? o["options"] : []).flatMap((raw) => {
+    const opt = obj(raw);
+    const optId = str(opt["id"]);
+    if (!optId) return [];
+    const optEn = str(opt["label_en"]) || optId;
+    return [{ id: optId, label: { en: optEn, ar: str(opt["label_ar"]) || optEn } }];
+  });
+  if (options.length === 0) return null;
+
+  return { ...base, kind: "multi", options };
+}
+
+function unitFor(sysName: string): LText {
+  const sys = sysName.toLowerCase();
+  if (sys === "price") return { en: "KWD", ar: "د.ك" };
+  if (sys.includes("mileage")) return { en: "km", ar: "كم" };
+  return { en: "", ar: "" };
 }
 
 /**
  * Serialises applied filters as repeated query params, the convention 4Sale's
- * own listing pages use: `condition[]=new&condition[]=used&price_min=…`.
+ * own listing pages use: `217[]=1066&217[]=1067`.
  *
  * The published page carries the same string in `data-fs-filters`, so whatever
  * fills the listings slot can forward it to the API verbatim.
  */
 export function filtersToQuery(filters: FilterValues): string {
   const params = new URLSearchParams();
-  filterParams(filters, params);
-  return params.toString();
-}
-
-function filterParams(filters: FilterValues, params: URLSearchParams): void {
   for (const [id, value] of Object.entries(filters)) {
     if (Array.isArray(value)) {
       for (const v of value) params.append(`${id}[]`, v);
     } else if (isRangeValue(value)) {
-      params.set(`${id}_min`, String(value.min));
-      params.set(`${id}_max`, String(value.max));
+      if (value.min != null) params.set(`${id}_min`, String(value.min));
+      if (value.max != null) params.set(`${id}_max`, String(value.max));
     } else if (value === true) {
       params.set(id, "1");
     }
   }
+  return params.toString();
 }
 
-export async function fetchListings(
-  path: CategoryPath,
-  limit: number,
-  filters: FilterValues = {},
-): Promise<Listing[]> {
-  if (!isLiveCatalogue()) return mockListings(path, limit, filters);
+/* ------------------------------------------------------------ atlas search */
 
-  const leaf = path[path.length - 1];
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (leaf) params.set("category", leaf.id);
-  filterParams(filters, params);
-  return readArray(await getJson(`/listings?${params.toString()}`))
-    .map(readListing)
-    .filter((l) => l.title.en !== "" || l.title.ar !== "");
+/**
+ * The service caps a page at 50 however large `limit` is, so asking for more is
+ * silently truncated rather than paged.
+ */
+export const SEARCH_MAX = 50;
+
+export type SearchResults = {
+  listings: Listing[];
+};
+
+/**
+ * One search result mapped onto the shape the builder renders.
+ *
+ * The payload nests the useful half under `raw`, and the two levels disagree in
+ * places (`raw.id` is a number, the outer `id` a string), so both are read with
+ * the outer value winning.
+ */
+function readSearchListing(v: unknown): Listing | null {
+  const o = obj(v);
+  const raw = obj(o["raw"]);
+
+  const id = str(o["id"]) || str(raw["id"]);
+  const title = str(o["title"]) || str(raw["title"]);
+  if (!id || !title) return null;
+
+  // Titles are seller-written free text and exist in one language only — there
+  // is no `title_ar`. Using the one string for both sides beats rendering an
+  // empty card in the Arabic view.
+  const name: LText = { en: title, ar: title };
+
+  const local = obj(raw["district_name_localize"]);
+  const areaEn = str(local["en"]) || str(raw["district_name"]);
+  const area: LText = { en: areaEn, ar: str(local["ar"]) || areaEn };
+
+  const user = obj(raw["user"]);
+  // The carousel pages through `thumbs` and appends one "See more" slide, so
+  // the dot count is the array length + 1 — not `images_count`.
+  const thumbs = Array.isArray(raw["thumbs"]) ? raw["thumbs"].map(str).filter(Boolean) : [];
+  const pinned = str(raw["status"]) === "pinned";
+
+  return {
+    id,
+    title: name,
+    price: readPrice(raw["price"]),
+    area,
+    // The leaf category this listing sits in. Same id space as the category
+    // tree, which is what lets a chosen category narrow results client-side
+    // while `category_id` on the search endpoint stays behind auth.
+    catId: str(raw["cat_id"]) || undefined,
+    /*
+     * The two badges the real card can show, read the way it reads them.
+     *
+     * `is_prem` is Featured — the gold crown. It is emphatically **not**
+     * `plan_id`: a keyword search returns plan ids 311, 59 and 326 across six
+     * ordinary results, so `plan_id` only means "has a paid plan", which nearly
+     * every listing does. Badging on it marked every card Featured.
+     *
+     * Both flags come back unset on most keyword results, which is correct —
+     * the real search grid shows Featured on roughly one card in six.
+     */
+    featured: raw["is_prem"] === true || undefined,
+    pinned: pinned || undefined,
+    // The 300px thumb is the right size for the picker grid and the card;
+    // `image` is the 1000px original.
+    image: str(raw["thumb"]) || str(o["image"]) || undefined,
+    url: str(o["url"]) || undefined,
+    // A pinned listing shows "Pinned today" in place of its age.
+    since: pinned
+      ? { en: "Pinned today", ar: "مثبت اليوم" }
+      : formatSince(str(raw["date_sort"]) || str(raw["date_published"])),
+    // `contact` and `phone` hold the same digits; either may be blank.
+    phone: str(raw["phone"]) || str(raw["contact"]) || undefined,
+    chat: raw["is_pm_enabled"] === true || undefined,
+    thumbs: thumbs.length ? thumbs : undefined,
+    // Only a verified seller gets an avatar at all, so the flag gates the logo
+    // rather than the logo gating itself.
+    verified: raw["is_verified"] === true || undefined,
+    vendorLogo:
+      raw["is_verified"] === true ? str(raw["logo"]) || str(user["image"]) || undefined : undefined,
+  };
+}
+
+/**
+ * Labels for the card's contact row.
+ *
+ * Here rather than in either renderer because the canvas and the publish
+ * serializer both draw this row, and a label that drifted between them would
+ * mean the preview and the published page disagreed about what a button says.
+ */
+/**
+ * Whether a listings block draws contact buttons on its cards.
+ *
+ * Missing reads as **on**: blocks saved before the toggle existed carry no
+ * `cardCtas` key, and they were rendering the buttons, so absence has to keep
+ * meaning the same thing rather than silently stripping them.
+ */
+export const readCardCtas = (v: unknown): boolean => v !== false;
+
+export const ACTION_LABEL = {
+  call: { en: "Call", ar: "اتصال" },
+  whatsapp: { en: "WhatsApp", ar: "واتساب" },
+  chat: { en: "Chat", ar: "دردشة" },
+} as const;
+
+/** Titles inside the Call / WhatsApp contact window, as q84sale.com writes them. */
+export const CONTACT_DIALOG = {
+  call: { en: "Call Now", ar: "اتصل الآن" },
+  whatsapp: { en: "Whatsapp", ar: "واتساب" },
+} as const;
+
+const LISTING_ORIGIN = "https://www.q84sale.com";
+
+/**
+ * The listing's page on q84sale.com.
+ *
+ * Chat and Favourite cannot open in-app sessions from a landing page, so they
+ * go here instead — the same destination a search-card click on 4Sale uses.
+ * A stored `url` wins; otherwise the id is enough for `/ {lang} /listing/{id}`,
+ * which 4Sale resolves to the current slug.
+ */
+export function listingDetailsUrl(listing: Pick<Listing, "id" | "url">, lang: Lang): string {
+  const stored = listing.url?.trim() ?? "";
+  if (stored) {
+    if (/^https?:\/\//i.test(stored)) return stored;
+    if (stored.startsWith("/")) return `${LISTING_ORIGIN}${stored}`;
+    return stored;
+  }
+  if (!listing.id) return "";
+  return `${LISTING_ORIGIN}/${lang}/listing/${encodeURIComponent(listing.id)}`;
+}
+
+/** Digits only, as `tel:` and `wa.me` want them. */
+export function listingPhoneDigits(phone: string | undefined): string {
+  return phone?.replace(/\D/g, "") ?? "";
+}
+
+/** `+965…` — the form the contact window prints next to the icon. */
+export function listingPhoneDisplay(digits: string): string {
+  if (!digits) return "";
+  return digits.startsWith("00") ? `+${digits.slice(2)}` : `+${digits}`;
+}
+
+/* --------------------------------------------------- card specification line */
+
+/** One category's attributes, as `attr id → { label, option labels }`. */
+type AttrIndex = Map<
+  string,
+  { sysName: string; numeric: boolean; boolean: boolean; options: Map<string, LText> }
+>;
+
+/**
+ * Attribute schemas, keyed by category id.
+ *
+ * A grid of 24 cards is usually two or three categories, so without this the
+ * same schema would be fetched once per card. Kept for the page's lifetime:
+ * category attributes change on the scale of product decisions, not sessions.
+ */
+const attrCache = new Map<string, Promise<AttrIndex>>();
+
+/**
+ * The attribute schema for a category, including everything it inherits.
+ *
+ * Note this is `/attributes`, **not** `/attributes/with-parent` — the names are
+ * the opposite way round to what they suggest. `/attributes` on the 5 Series
+ * leaf returns all 43 Used Cars attributes (Year, Mileage, Colour and the
+ * rest), while `/attributes/with-parent` returns only the one attribute the
+ * leaf defines itself. That is what makes a spec line possible from a listing's
+ * own `cat_id` alone, with no walk up the category tree.
+ */
+function fetchAttrIndex(catId: string): Promise<AttrIndex> {
+  const hit = attrCache.get(catId);
+  if (hit) return hit;
+
+  const pending = getJson(`/categories/${encodeURIComponent(catId)}/attributes`)
+    .then((json) => {
+      const index: AttrIndex = new Map();
+      for (const rawAttr of readAttributes(json)) {
+        const a = obj(rawAttr);
+        const id = str(a["attr_id"]);
+        if (!id) continue;
+        const en = str(a["label_en"]) || str(a["sys_name"]);
+        const options = new Map<string, LText>();
+        for (const rawOpt of Array.isArray(a["options"]) ? a["options"] : []) {
+          const opt = obj(rawOpt);
+          const optId = str(opt["id"]);
+          if (!optId) continue;
+          const optEn = str(opt["label_en"]);
+          options.set(optId, { en: optEn, ar: str(opt["label_ar"]) || optEn });
+        }
+        index.set(id, {
+          sysName: str(a["sys_name"]) || en,
+          numeric: str(a["type"]) === "number",
+          boolean: str(a["type"]) === "bool",
+          options,
+        });
+      }
+      return index;
+    })
+    // A missing schema costs the spec line, not the card.
+    .catch(() => new Map() as AttrIndex);
+
+  attrCache.set(catId, pending);
+  return pending;
+}
+
+/** How many attributes the line shows before it would start wrapping. */
+const SPEC_PARTS = 3;
+
+/**
+ * Builds "2024, 80 K Km, Gray" from a listing's `attrs`.
+ *
+ * The order is the payload's own — cars arrive as year, mileage, colour, which
+ * is the order the real card prints — so no per-category list of "which
+ * attributes belong on a card" has to be maintained here. Values that the
+ * schema cannot resolve are dropped rather than printed as bare ids.
+ */
+function buildSpecs(rawAttrs: unknown, index: AttrIndex): LText | undefined {
+  if (!Array.isArray(rawAttrs)) return undefined;
+
+  const parts: LText[] = [];
+  for (const entry of rawAttrs) {
+    if (parts.length >= SPEC_PARTS) break;
+    const e = obj(entry);
+    const attr = index.get(str(e["id"]));
+    // Booleans are filtered out of the card's line by the real component, and
+    // an unresolved id is dropped rather than printed raw.
+    if (!attr || attr.boolean) continue;
+
+    if (attr.numeric) {
+      const n = num(e["val"], Number.NaN);
+      if (!Number.isFinite(n)) continue;
+      parts.push({
+        en: formatNumericSpec(attr.sysName, n, "en"),
+        ar: formatNumericSpec(attr.sysName, n, "ar"),
+      });
+      continue;
+    }
+    const label = attr.options.get(str(e["val"]));
+    if (label) parts.push(label);
+  }
+
+  if (parts.length === 0) return undefined;
+  return {
+    en: parts.map((p) => p.en).join(", "),
+    ar: parts.map((p) => p.ar).join("، "),
+  };
+}
+
+/**
+ * Units for the numeric attributes that reach a listing card.
+ *
+ * The real app reads these from `master_data.sqlite` — a server-side file, so a
+ * browser cannot ask for them, and Atlas's attribute payload omits the field
+ * entirely. Mileage is the only numeric attribute the search card actually
+ * prints, and its unit is legible from the live site ("140 K Km"), so it is
+ * recorded here. Anything not listed prints its number with no unit rather than
+ * inventing one. Keyed on `sys_name`.
+ */
+const SPEC_UNIT: Record<string, LText> = {
+  mileage: { en: "Km", ar: "كم" },
+};
+
+/**
+ * A number the way 4Sale prints it — `tenKNumFormatter` from the web app.
+ *
+ * The thresholds are the reason the same odometer field shows up as both
+ * "140 K Km" and "4,600 Km": above 9,999 the value is divided by 1,000 and
+ * suffixed "K", below that it is printed whole with separators. Sellers enter
+ * mileage in both units, so 140000 reads "140 K" while 4600 reads "4,600" —
+ * which looks inconsistent on the real site too, and matching it is the point.
+ *
+ * Millions and billions get the same treatment one and two steps up. Fractions
+ * are capped at two digits and only shown when the division produced one.
+ */
+function tenKNumFormatter(value: number, lang: Lang): string {
+  const abs = Math.abs(value);
+  const scale = (divisor: number, suffix: string) => {
+    const scaled = value / divisor;
+    const fraction = Math.abs(scaled) % 1 !== 0 ? 2 : 0;
+    return (
+      scaled.toLocaleString(lang === "ar" ? "ar-EG" : "en-US", {
+        minimumFractionDigits: fraction,
+        maximumFractionDigits: 2,
+      }) + suffix
+    );
+  };
+
+  if (abs > 999_999_999) return scale(1_000_000_000, " B");
+  if (abs > 999_999) return scale(1_000_000, " M");
+  if (abs > 9_999) return scale(1_000, " K");
+  return scale(1, "");
+}
+
+/** A numeric attribute as the card prints it: formatted number, then its unit. */
+function formatNumericSpec(sysName: string, value: number, lang: Lang): string {
+  const unit = SPEC_UNIT[sysName.toLowerCase()];
+  const shown = tenKNumFormatter(value, lang);
+  return unit ? `${shown} ${t(unit, lang)}` : shown;
+}
+
+/**
+ * Units of relative age, largest first, with the web app's own labels.
+ *
+ * The labels are singular on purpose — the real card reads "Since 3 Hour", not
+ * "3 Hours" — and there is deliberately no Year: `getElapsedTime` keeps
+ * reporting months past twelve, so a two-year-old listing says "Since 26 Month".
+ */
+const SINCE_UNITS: { seconds: number; en: string; ar: string }[] = [
+  { seconds: 2_592_000, en: "Month", ar: "شهر" },
+  { seconds: 604_800, en: "Week", ar: "إسبوع" },
+  { seconds: 86_400, en: "Day", ar: "يوم" },
+  { seconds: 3_600, en: "Hour", ar: "ساعة" },
+  { seconds: 60, en: "Minute", ar: "دقيقة" },
+];
+
+/**
+ * "Since 3 Hour", the way the real card words it — singular unit, no "ago".
+ *
+ * The timestamps carry no zone and are Kuwait local (UTC+3), so `Z` is appended
+ * rather than letting the browser read them as its own local time, which would
+ * shift every card by the viewer's offset.
+ *
+ * This is resolved once, when the editor previews. A published page is static
+ * HTML, so the phrase it ships with is frozen at publish time and drifts from
+ * then on — a page published today reads "Since 1 Hour" next week. Making it
+ * live needs either a script (which published pages forbid) or for the host to
+ * render the block itself.
+ */
+function formatSince(stamp: string): LText | undefined {
+  if (!stamp) return undefined;
+  const ms = Date.parse(`${stamp.replace(" ", "T")}+03:00`);
+  if (!Number.isFinite(ms)) return undefined;
+
+  const elapsed = (Date.now() - ms) / 1000;
+  if (elapsed < 60) return { en: "Now", ar: "الآن" };
+
+  for (const unit of SINCE_UNITS) {
+    const n = Math.floor(elapsed / unit.seconds);
+    if (n >= 1) return { en: `Since ${n} ${unit.en}`, ar: `منذ ${n} ${unit.ar}` };
+  }
+  return undefined;
+}
+
+/**
+ * Prices come back as a bare number with no currency and no consistent unit —
+ * a 2024 5 Series reads `17` while a 2010 3 Series reads `1000`. No multiplier
+ * is guessed; the number is shown exactly as the service reports it, through
+ * the same formatter the real card uses, then suffixed with the currency.
+ *
+ * The currency is **KWD**, not KD. Both the card and the JSON-LD the web app
+ * emits say KWD.
+ */
+function readPrice(v: unknown): LText {
+  const n = typeof v === "number" ? v : Number(str(v));
+  if (!Number.isFinite(n) || n <= 0) return { en: "", ar: "" };
+  return {
+    en: `${tenKNumFormatter(n, "en")} KWD`,
+    ar: `${tenKNumFormatter(n, "ar")} د.ك`,
+  };
+}
+
+/**
+ * Keyword search against Atlas.
+ *
+ * `q` is mandatory upstream — the service answers 400 to a request without one
+ * — so an empty keyword resolves to no results instead of a failed request.
+ * Do not send `category_id` or `filters`: Atlas forwards those to V4
+ * `advancedSearch`, which 502s / times out without its credential.
+ */
+export async function searchListings(
+  keyword: string,
+  limit: number,
+  page = 1,
+): Promise<SearchResults> {
+  const q = keyword.trim();
+  if (!q) return { listings: [] };
+
+  const params = new URLSearchParams({
+    q,
+    page: String(page),
+    limit: String(Math.min(limit, SEARCH_MAX)),
+  });
+  const json = await getJson(`/search?${params.toString()}`);
+
+  // The response fans out by source — `4sale` holds classified listings, the
+  // rest are business directories and new-car models we do not render.
+  const bucket = obj(obj(obj(obj(json)["data"])["results"])["4sale"]);
+
+  // A failing source reports itself inside an otherwise 200 response, with an
+  // empty item list. Without this the editor would read a rejected request as
+  // "nothing matched" and go looking for a better keyword.
+  if (str(bucket["status"]) === "error") {
+    throw new Error(str(bucket["error"]) || "The listings service rejected this search");
+  }
+
+  const items = Array.isArray(bucket["normal_items"]) ? bucket["normal_items"] : [];
+
+  const listings = items.flatMap((item) => {
+    const listing = readSearchListing(item);
+    return listing ? [{ listing, attrs: obj(obj(item)["raw"])["attrs"] }] : [];
+  });
+
+  // The spec line needs one schema request per distinct category, so they are
+  // fetched together after the results are known rather than per card. A grid
+  // is typically two or three categories, and `fetchAttrIndex` caches, so a
+  // second search over the same branch costs nothing.
+  const catIds = [...new Set(listings.flatMap(({ listing }) => listing.catId ?? []))];
+  const indexes = new Map(
+    await Promise.all(catIds.map(async (id) => [id, await fetchAttrIndex(id)] as const)),
+  );
+
+  for (const { listing, attrs } of listings) {
+    const index = listing.catId ? indexes.get(listing.catId) : undefined;
+    if (index) listing.specs = buildSpecs(attrs, index);
+  }
+
+  // `total` is deliberately not read: the service reports the same 75 for every
+  // query, including one that matches nothing, so it is not a match count and
+  // showing it would be a fabricated number.
+  return { listings: listings.map(({ listing }) => listing) };
 }
 
 /* ----------------------------------------------------- reading saved props */
@@ -291,6 +850,17 @@ export async function fetchListings(
  * drop what they cannot understand rather than throwing — a malformed listings
  * block should render as an unconfigured one, not break the canvas.
  */
+/**
+ * The free-text search term.
+ *
+ * Deliberately not trimmed: this feeds a controlled input, and trimming on read
+ * would swallow the space between two words as it is typed. `searchListings`
+ * trims at the point it builds the query instead.
+ */
+export function readKeyword(v: unknown): string {
+  return str(v);
+}
+
 export function readCategoryPath(v: unknown): CategoryPath {
   if (!Array.isArray(v)) return [];
   return v.flatMap((raw) => {
@@ -320,7 +890,18 @@ export function readFilterValues(v: unknown): FilterValues {
       if (ids.length) out[key] = ids;
     } else if (raw && typeof raw === "object") {
       const o = raw as Record<string, unknown>;
-      if ("min" in o || "max" in o) out[key] = { min: num(o["min"], 0), max: num(o["max"], 0) };
+      if ("min" in o || "max" in o) {
+        const next: RangeValue = {};
+        if (o["min"] !== undefined && o["min"] !== null && o["min"] !== "") {
+          const n = num(o["min"], Number.NaN);
+          if (Number.isFinite(n)) next.min = n;
+        }
+        if (o["max"] !== undefined && o["max"] !== null && o["max"] !== "") {
+          const n = num(o["max"], Number.NaN);
+          if (Number.isFinite(n)) next.max = n;
+        }
+        if (next.min !== undefined || next.max !== undefined) out[key] = next;
+      }
     }
   }
   return out;
@@ -346,16 +927,29 @@ export function summariseFilters(
       return value === true ? [{ key: f.id, field: f.id, label: f.label }] : [];
     }
     if (f.kind === "range") {
-      // A range covering the whole band narrows nothing, so it is not a chip.
-      if (!isRangeValue(value) || (value.min <= f.min && value.max >= f.max)) return [];
-      const span = `${value.min.toLocaleString("en-US")}–${value.max.toLocaleString("en-US")}`;
+      if (!isRangeValue(value) || (value.min == null && value.max == null)) return [];
+      // A bounded slider covering the whole band narrows nothing.
+      if (
+        f.max > f.min &&
+        value.min != null &&
+        value.max != null &&
+        value.min <= f.min &&
+        value.max >= f.max
+      ) {
+        return [];
+      }
+      const from = value.min != null ? value.min.toLocaleString("en-US") : "";
+      const to = value.max != null ? value.max.toLocaleString("en-US") : "";
+      const span = from && to ? `${from}–${to}` : from ? `≥ ${from}` : `≤ ${to}`;
+      const unitEn = f.unit.en ? ` ${f.unit.en}` : "";
+      const unitAr = f.unit.ar ? ` ${f.unit.ar}` : "";
       return [
         {
           key: f.id,
           field: f.id,
           label: {
-            en: `${f.label.en}: ${span}${f.unit.en ? ` ${f.unit.en}` : ""}`,
-            ar: `${f.label.ar}: ${span}${f.unit.ar ? ` ${f.unit.ar}` : ""}`,
+            en: `${f.label.en}: ${span}${unitEn}`,
+            ar: `${f.label.ar}: ${span}${unitAr}`,
           },
         },
       ];
@@ -392,582 +986,4 @@ export function readListingItems(v: unknown): Listing[] {
     if (!str(o["id"])) return [];
     return [readListing(o)];
   });
-}
-
-/* ------------------------------------------------------------------ *
- * Mock catalogue — used until VITE_LISTINGS_API points somewhere real.
- * ------------------------------------------------------------------ */
-
-/** Top-level branches double as the key for which listing generator to use. */
-type Domain = "cars" | "realestate" | "electronics" | "furniture" | "services" | "heavy" | "jobs";
-
-type MockNode = { id: string; en: string; ar: string; children?: MockNode[] };
-
-const MOCK_TREE: MockNode[] = [
-  {
-    id: "cars",
-    en: "Cars",
-    ar: "سيارات",
-    children: [
-      {
-        id: "cars-toyota",
-        en: "Toyota",
-        ar: "تويوتا",
-        children: [
-          { id: "cars-toyota-landcruiser", en: "Land Cruiser", ar: "لاند كروزر" },
-          { id: "cars-toyota-prado", en: "Prado", ar: "برادو" },
-          { id: "cars-toyota-camry", en: "Camry", ar: "كامري" },
-          { id: "cars-toyota-corolla", en: "Corolla", ar: "كورولا" },
-        ],
-      },
-      {
-        id: "cars-nissan",
-        en: "Nissan",
-        ar: "نيسان",
-        children: [
-          { id: "cars-nissan-patrol", en: "Patrol", ar: "باترول" },
-          { id: "cars-nissan-altima", en: "Altima", ar: "التيما" },
-          { id: "cars-nissan-xtrail", en: "X-Trail", ar: "إكس تريل" },
-        ],
-      },
-      {
-        id: "cars-lexus",
-        en: "Lexus",
-        ar: "لكزس",
-        children: [
-          { id: "cars-lexus-lx", en: "LX 600", ar: "إل إكس 600" },
-          { id: "cars-lexus-es", en: "ES 350", ar: "إي إس 350" },
-        ],
-      },
-      {
-        id: "cars-chevrolet",
-        en: "Chevrolet",
-        ar: "شيفروليه",
-        children: [
-          { id: "cars-chevrolet-tahoe", en: "Tahoe", ar: "تاهو" },
-          { id: "cars-chevrolet-malibu", en: "Malibu", ar: "ماليبو" },
-        ],
-      },
-    ],
-  },
-  {
-    id: "realestate",
-    en: "Real Estate",
-    ar: "عقارات",
-    children: [
-      {
-        id: "realestate-apartments",
-        en: "Apartments",
-        ar: "شقق",
-        children: [
-          { id: "realestate-apartments-rent", en: "For Rent", ar: "للإيجار" },
-          { id: "realestate-apartments-sale", en: "For Sale", ar: "للبيع" },
-        ],
-      },
-      {
-        id: "realestate-villas",
-        en: "Villas",
-        ar: "فلل",
-        children: [
-          { id: "realestate-villas-rent", en: "For Rent", ar: "للإيجار" },
-          { id: "realestate-villas-sale", en: "For Sale", ar: "للبيع" },
-        ],
-      },
-      { id: "realestate-chalets", en: "Chalets", ar: "شاليهات" },
-      { id: "realestate-land", en: "Land", ar: "أراضي" },
-    ],
-  },
-  {
-    id: "electronics",
-    en: "Electronics",
-    ar: "إلكترونيات",
-    children: [
-      {
-        id: "electronics-mobiles",
-        en: "Mobiles",
-        ar: "هواتف",
-        children: [
-          { id: "electronics-mobiles-iphone", en: "iPhone", ar: "آيفون" },
-          { id: "electronics-mobiles-samsung", en: "Samsung", ar: "سامسونج" },
-          { id: "electronics-mobiles-xiaomi", en: "Xiaomi", ar: "شاومي" },
-        ],
-      },
-      {
-        id: "electronics-laptops",
-        en: "Laptops",
-        ar: "لابتوبات",
-        children: [
-          { id: "electronics-laptops-macbook", en: "MacBook", ar: "ماك بوك" },
-          { id: "electronics-laptops-dell", en: "Dell", ar: "ديل" },
-        ],
-      },
-      { id: "electronics-gaming", en: "Gaming", ar: "ألعاب" },
-    ],
-  },
-  {
-    id: "furniture",
-    en: "Furniture",
-    ar: "أثاث",
-    children: [
-      { id: "furniture-living", en: "Living Room", ar: "غرف معيشة" },
-      { id: "furniture-bedroom", en: "Bedroom", ar: "غرف نوم" },
-      { id: "furniture-office", en: "Office", ar: "أثاث مكتبي" },
-    ],
-  },
-  {
-    id: "services",
-    en: "Services",
-    ar: "خدمات",
-    children: [
-      { id: "services-moving", en: "Moving", ar: "نقل عفش" },
-      { id: "services-cleaning", en: "Cleaning", ar: "تنظيف" },
-      { id: "services-maintenance", en: "Maintenance", ar: "صيانة" },
-    ],
-  },
-  {
-    id: "heavy",
-    en: "Heavy Equipment",
-    ar: "معدات ثقيلة",
-    children: [
-      { id: "heavy-trucks", en: "Trucks", ar: "شاحنات" },
-      { id: "heavy-forklifts", en: "Forklifts", ar: "رافعات شوكية" },
-    ],
-  },
-  {
-    id: "jobs",
-    en: "Jobs",
-    ar: "وظائف",
-    children: [
-      { id: "jobs-fulltime", en: "Full-time", ar: "دوام كامل" },
-      { id: "jobs-parttime", en: "Part-time", ar: "دوام جزئي" },
-    ],
-  },
-];
-
-function findNode(id: string, nodes: MockNode[] = MOCK_TREE): MockNode | undefined {
-  for (const n of nodes) {
-    if (n.id === id) return n;
-    const hit = n.children && findNode(id, n.children);
-    if (hit) return hit;
-  }
-  return undefined;
-}
-
-/** Mirrors the network shape, latency included, so loading states are real. */
-const settle = <T>(value: T): Promise<T> =>
-  new Promise((resolve) => setTimeout(() => resolve(value), 260));
-
-function mockCategories(parentId?: string): Promise<Category[]> {
-  const nodes = parentId ? (findNode(parentId)?.children ?? []) : MOCK_TREE;
-  return settle(
-    nodes.map((n) => ({
-      id: n.id,
-      name: { en: n.en, ar: n.ar },
-      hasChildren: !!n.children?.length,
-    })),
-  );
-}
-
-/* ------------------------------------------------------ mock listing bodies */
-
-const AREAS: { id: string; name: LText }[] = [
-  { id: "kuwait-city", name: { en: "Kuwait City", ar: "مدينة الكويت" } },
-  { id: "hawally", name: { en: "Hawally", ar: "حولي" } },
-  { id: "salmiya", name: { en: "Salmiya", ar: "السالمية" } },
-  { id: "jahra", name: { en: "Jahra", ar: "الجهراء" } },
-  { id: "farwaniya", name: { en: "Farwaniya", ar: "الفروانية" } },
-  { id: "ahmadi", name: { en: "Ahmadi", ar: "الأحمدي" } },
-  { id: "mangaf", name: { en: "Mangaf", ar: "المنقف" } },
-  { id: "fintas", name: { en: "Fintas", ar: "الفنطاس" } },
-];
-
-/** Cycles a fixed table — every generator below indexes by result position. */
-const pick = <T>(list: T[], i: number): T => list[i % list.length] as T;
-
-const kd = (n: number) => `${n.toLocaleString("en-US")} KD`;
-
-const CAR_TRIMS: LText[] = [
-  { en: "GXR", ar: "GXR" },
-  { en: "VXR", ar: "VXR" },
-  { en: "EXR", ar: "EXR" },
-  { en: "Limited", ar: "ليمتد" },
-];
-
-const CONDITIONS: { id: string; name: LText }[] = [
-  { id: "new", name: { en: "New", ar: "جديد" } },
-  { id: "like-new", name: { en: "Like new", ar: "شبه جديد" } },
-  { id: "used", name: { en: "Used", ar: "مستعمل" } },
-];
-
-const STORAGE = [128, 256, 512, 64];
-
-/**
- * Deterministic spread across a range.
- *
- * The generators used to walk prices down linearly, which ran negative once the
- * pool grew past a dozen and left every filter matching the same contiguous
- * block. Stepping by a co-prime multiple scatters values over the whole band
- * while staying stable for a given index.
- */
-const spread = (i: number, min: number, max: number, step: number): number => {
-  const span = Math.floor((max - min) / step) + 1;
-  return min + ((i * 7) % span) * step;
-};
-
-/** Hidden per-listing values the mock filters match against. */
-type Facets = Record<string, string | number | boolean>;
-
-type Body = { title: LText; price: string; amount: number; tag: string; facets: Facets };
-
-/**
- * One generator per top-level branch.
- *
- * A single generic generator produced "For Rent 2023 — 16,400 KD" for an
- * apartment, which makes the preview useless for judging whether the block
- * looks right. Each domain gets titles and a price scale that belong to it, so
- * drilling into a different branch visibly changes the results.
- */
-const BODIES: Record<Domain, (leaf: LText, i: number) => Body> = {
-  cars: (leaf, i) => {
-    const trim = pick(CAR_TRIMS, i);
-    // Spans the full range `yearFilter` offers — a year option that no listing
-    // carries makes the filter look broken.
-    const year = 2025 - (i % 16);
-    const amount = spread(i, 2500, 24000, 250);
-    return {
-      title: { en: `${leaf.en} ${trim.en} ${year}`, ar: `${leaf.ar} ${trim.ar} ${year}` },
-      price: kd(amount),
-      amount,
-      tag: pick(["Verified", "Featured", "New"], i),
-      facets: {
-        year: String(year),
-        mileage: spread(i, 0, 260000, 5000),
-        transmission: i % 5 === 0 ? "manual" : "automatic",
-        condition: pick(CONDITIONS, i).id,
-      },
-    };
-  },
-  realestate: (leaf, i) => {
-    const beds = 1 + (i % 5);
-    const size = spread(i, 60, 600, 10);
-    const amount = spread(i, 180, 1400, 20);
-    return {
-      title: {
-        en: `${beds}-Bedroom ${leaf.en} · ${size} m²`,
-        ar: `${leaf.ar} · ${beds} غرف · ${size} م²`,
-      },
-      price: `${kd(amount)}/mo`,
-      amount,
-      tag: pick(["Verified", "Featured"], i),
-      facets: { bedrooms: String(beds), size, furnished: i % 3 === 0 },
-    };
-  },
-  electronics: (leaf, i) => {
-    const cond = pick(CONDITIONS, i);
-    const storage = pick(STORAGE, i);
-    const amount = spread(i, 25, 480, 5);
-    return {
-      title: {
-        en: `${leaf.en} ${storage}GB — ${cond.name.en}`,
-        ar: `${leaf.ar} ${storage} جيجا — ${cond.name.ar}`,
-      },
-      price: kd(amount),
-      amount,
-      tag: pick(["New", "Verified", "Featured"], i),
-      facets: { storage: String(storage), condition: cond.id },
-    };
-  },
-  furniture: (leaf, i) => {
-    const cond = pick(CONDITIONS, i);
-    const amount = spread(i, 15, 600, 5);
-    return {
-      title: {
-        en: `${leaf.en} set — ${cond.name.en}`,
-        ar: `طقم ${leaf.ar} — ${cond.name.ar}`,
-      },
-      price: kd(amount),
-      amount,
-      tag: pick(["Featured", "Verified"], i),
-      facets: { condition: cond.id },
-    };
-  },
-  services: (leaf, i) => {
-    const amount = spread(i, 10, 120, 5);
-    return {
-      title: {
-        en: `${leaf.en} — same-day service`,
-        ar: `${leaf.ar} — خدمة في نفس اليوم`,
-      },
-      price: `From ${kd(amount)}`,
-      amount,
-      tag: pick(["Verified", "Featured"], i),
-      facets: {},
-    };
-  },
-  heavy: (leaf, i) => {
-    const year = 2025 - (i % 18);
-    const amount = spread(i, 3500, 42000, 500);
-    return {
-      title: { en: `${leaf.en} ${year}`, ar: `${leaf.ar} ${year}` },
-      price: kd(amount),
-      amount,
-      tag: pick(["Verified", "Featured"], i),
-      facets: { year: String(year), condition: pick(CONDITIONS, i).id },
-    };
-  },
-  jobs: (leaf, i) => {
-    const roles: LText[] = [
-      { en: "Sales Representative", ar: "مندوب مبيعات" },
-      { en: "Accountant", ar: "محاسب" },
-      { en: "Driver", ar: "سائق" },
-      { en: "Technician", ar: "فني" },
-    ];
-    const role = pick(roles, i);
-    const amount = spread(i, 250, 1500, 25);
-    return {
-      title: { en: `${role.en} — ${leaf.en}`, ar: `${role.ar} — ${leaf.ar}` },
-      price: `${kd(amount)}/mo`,
-      amount,
-      tag: pick(["Urgent", "Verified"], i),
-      facets: { experience: pick(["entry", "mid", "senior"], i) },
-    };
-  },
-};
-
-/**
- * How many results the mock service holds per branch.
- *
- * Larger than anything the block renders, because the point of the picker is to
- * filter a realistic pool down — a pool the size of the grid would make every
- * filter look like it did nothing.
- */
-const MOCK_POOL = 60;
-
-/**
- * Applies saved filter values to a listing's hidden facets.
- *
- * A facet the listing does not carry is ignored rather than treated as a
- * mismatch, so a filter left over from a different category cannot silently
- * empty the results.
- */
-function matchesFilters(facets: Facets, filters: FilterValues): boolean {
-  for (const [id, value] of Object.entries(filters)) {
-    const actual = facets[id];
-    if (actual === undefined) continue;
-
-    if (Array.isArray(value)) {
-      if (value.length > 0 && !value.includes(String(actual))) return false;
-    } else if (isRangeValue(value)) {
-      if (typeof actual === "number" && (actual < value.min || actual > value.max)) return false;
-    } else if (value === true && actual !== true) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * Plausible results for whichever branch was chosen.
- *
- * Deterministic: the same path always yields the same listings, so re-opening
- * the preview does not reshuffle what the editor just looked at.
- */
-function mockListings(
-  path: CategoryPath,
-  limit: number,
-  filters: FilterValues,
-): Promise<Listing[]> {
-  const root = path[0]?.id;
-  const leaf = path[path.length - 1];
-  const label: LText = leaf?.name ?? { en: "Listing", ar: "إعلان" };
-  const body = root && root in BODIES ? BODIES[root as Domain] : BODIES.cars;
-
-  const pool = Array.from({ length: MOCK_POOL }, (_, i) => {
-    const { title, price, amount, tag, facets } = body(label, i);
-    const area = pick(AREAS, i);
-    return {
-      listing: {
-        id: `mock-${leaf?.id ?? "any"}-${i}`,
-        title,
-        price,
-        area: area.name,
-        tag,
-      },
-      facets: { ...facets, price: amount, area: area.id, verified: tag === "Verified" },
-    };
-  });
-
-  return settle(
-    pool
-      .filter((entry) => matchesFilters(entry.facets, filters))
-      .slice(0, Math.max(1, limit))
-      .map((entry) => entry.listing),
-  );
-}
-
-/* ------------------------------------------------------------ mock filters */
-
-const lt = (en: string, ar: string): LText => ({ en, ar });
-
-const opts = (list: [string, string, string][]): FilterOption[] =>
-  list.map(([id, en, ar]) => ({ id, label: { en, ar } }));
-
-const AREA_FILTER: FilterField = {
-  id: "area",
-  label: lt("Area", "المنطقة"),
-  primary: true,
-  kind: "multi",
-  options: AREAS.map((a) => ({ id: a.id, label: a.name })),
-};
-
-const VERIFIED_FILTER: FilterField = {
-  id: "verified",
-  label: lt("Verified sellers only", "معلنون موثوقون فقط"),
-  primary: false,
-  kind: "toggle",
-};
-
-const CONDITION_FILTER: FilterField = {
-  id: "condition",
-  label: lt("Condition", "الحالة"),
-  primary: true,
-  kind: "multi",
-  options: CONDITIONS.map((c) => ({ id: c.id, label: c.name })),
-};
-
-const priceFilter = (min: number, max: number, step: number, label?: LText): FilterField => ({
-  id: "price",
-  label: label ?? lt("Price", "السعر"),
-  primary: true,
-  kind: "range",
-  min,
-  max,
-  step,
-  unit: lt("KD", "د.ك"),
-});
-
-const yearFilter = (from: number, to: number): FilterField => ({
-  id: "year",
-  label: lt("Year", "سنة الصنع"),
-  primary: true,
-  kind: "multi",
-  options: Array.from({ length: to - from + 1 }, (_, k) => {
-    const y = String(to - k);
-    return { id: y, label: lt(y, y) };
-  }),
-});
-
-/**
- * Filters per top-level branch.
- *
- * Deliberately different per vertical rather than one shared list: 4Sale's own
- * category pages offer storage capacity under mobiles and mileage under cars,
- * and a schema that did not vary would prove nothing about the plumbing.
- */
-const MOCK_FILTERS: Record<Domain, FilterField[]> = {
-  cars: [
-    priceFilter(0, 30000, 250),
-    yearFilter(2010, 2025),
-    {
-      id: "transmission",
-      label: lt("Transmission", "ناقل الحركة"),
-      primary: true,
-      kind: "multi",
-      options: opts([
-        ["automatic", "Automatic", "أوتوماتيك"],
-        ["manual", "Manual", "مانيوال"],
-      ]),
-    },
-    AREA_FILTER,
-    {
-      id: "mileage",
-      label: lt("Mileage", "الممشى"),
-      primary: false,
-      kind: "range",
-      min: 0,
-      max: 300000,
-      step: 5000,
-      unit: lt("km", "كم"),
-    },
-    { ...CONDITION_FILTER, primary: false },
-    VERIFIED_FILTER,
-  ],
-  electronics: [
-    CONDITION_FILTER,
-    priceFilter(0, 600, 5),
-    {
-      id: "storage",
-      label: lt("Storage capacity", "سعة التخزين"),
-      primary: true,
-      kind: "multi",
-      options: opts([
-        ["64", "64 GB", "64 جيجا"],
-        ["128", "128 GB", "128 جيجا"],
-        ["256", "256 GB", "256 جيجا"],
-        ["512", "512 GB", "512 جيجا"],
-      ]),
-    },
-    AREA_FILTER,
-    VERIFIED_FILTER,
-  ],
-  realestate: [
-    priceFilter(0, 1600, 20, lt("Rent per month", "الإيجار الشهري")),
-    {
-      id: "bedrooms",
-      label: lt("Bedrooms", "عدد الغرف"),
-      primary: true,
-      kind: "multi",
-      options: opts([
-        ["1", "1", "1"],
-        ["2", "2", "2"],
-        ["3", "3", "3"],
-        ["4", "4", "4"],
-        ["5", "5+", "+5"],
-      ]),
-    },
-    AREA_FILTER,
-    {
-      id: "size",
-      label: lt("Floor area", "المساحة"),
-      primary: false,
-      kind: "range",
-      min: 50,
-      max: 600,
-      step: 10,
-      unit: lt("m²", "م²"),
-    },
-    { id: "furnished", label: lt("Furnished", "مفروش"), primary: false, kind: "toggle" },
-    VERIFIED_FILTER,
-  ],
-  furniture: [CONDITION_FILTER, priceFilter(0, 700, 5), AREA_FILTER, VERIFIED_FILTER],
-  services: [priceFilter(0, 150, 5), AREA_FILTER, VERIFIED_FILTER],
-  heavy: [
-    priceFilter(0, 50000, 500),
-    yearFilter(2008, 2025),
-    { ...CONDITION_FILTER, primary: false },
-    AREA_FILTER,
-    VERIFIED_FILTER,
-  ],
-  jobs: [
-    priceFilter(0, 2000, 25, lt("Salary", "الراتب")),
-    {
-      id: "experience",
-      label: lt("Experience", "الخبرة"),
-      primary: true,
-      kind: "multi",
-      options: opts([
-        ["entry", "Entry level", "مبتدئ"],
-        ["mid", "Mid level", "متوسط"],
-        ["senior", "Senior", "خبير"],
-      ]),
-    },
-    AREA_FILTER,
-    VERIFIED_FILTER,
-  ],
-};
-
-function mockFilters(path: CategoryPath): Promise<FilterField[]> {
-  const root = path[0]?.id;
-  if (!root) return settle<FilterField[]>([]);
-  return settle(root in MOCK_FILTERS ? MOCK_FILTERS[root as Domain] : MOCK_FILTERS.cars);
 }

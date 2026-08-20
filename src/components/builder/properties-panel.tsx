@@ -8,9 +8,23 @@ import {
   type Lang,
   type LText,
   type PageElement,
+  type TextWeight,
+  ICON_TONES,
+  ICON_TONE_CLASS,
+  type IconStyle,
+  iconStyle,
+  iconTone,
+  iconsLayout,
+  iconsSize,
+  containerDirection,
+  containerTracks,
+  layoutLabel,
+  textWeight,
   LAYOUT_LABEL,
   uid,
 } from "@/lib/builder-types";
+import { CTA_RADIUS_MAX, ctaAction, ctaRadius } from "@/lib/cta";
+import { readCardCtas } from "@/lib/listings-api";
 import {
   Field,
   Pill,
@@ -22,12 +36,10 @@ import {
   TextInput,
   Toggle,
 } from "./controls";
-import {
-  DEFAULT_CTA_COLOR,
-  DEFAULT_CTA_TEXT_COLOR,
-  DEFAULT_TEXT_COLOR,
-} from "@/lib/container-bg";
-import { LucideIcon } from "./renderer";
+import { ctaVariant } from "@/lib/container-bg";
+import { cn } from "@/lib/utils";
+import { IconPicker } from "./icon-picker";
+import { UiIcon as Icon } from "./ui-icon";
 import { ListingsEditor } from "./listings-picker";
 
 function LInput({
@@ -57,177 +69,178 @@ function LInput({
 /**
  * Text colour picker shared by headings and paragraphs.
  *
- * `Auto` writes no colour at all, letting the container's own text colour
- * through — so copy stays readable when the background changes later.
+ * Three palette choices, no free colour: text on a 4Sale page is either the
+ * dark ink or the light ink, and `Auto` writes no colour at all so the
+ * container's own text colour comes through — which keeps copy readable when
+ * the background changes later. Switching away from a legacy custom colour
+ * clears the stored hex so it cannot resurface.
  */
 function TextColorField({
   tone,
-  color,
   update,
 }: {
   tone: string | undefined;
-  color: string | undefined;
   update: (patch: Record<string, unknown>) => void;
 }) {
   return (
-    <>
-      <Field label="Text color">
-        <Segmented
-          value={tone ?? "auto"}
-          onChange={(v) =>
-            update(v === "custom" ? { tone: v, color: color || DEFAULT_TEXT_COLOR } : { tone: v })
-          }
-          options={[
-            { value: "auto", label: "Auto" },
-            { value: "light", label: "Light" },
-            { value: "dark", label: "Dark" },
-            { value: "custom", label: "Custom" },
-          ]}
-        />
-      </Field>
-      {tone === "custom" && (
-        <div className="flex items-center gap-2">
-          <input
-            type="color"
-            value={color || DEFAULT_TEXT_COLOR}
-            onChange={(e) => update({ color: e.target.value })}
-            className="size-9 shrink-0 cursor-pointer rounded-lg border border-border bg-background"
-          />
-          <TextInput
-            value={color || DEFAULT_TEXT_COLOR}
-            onChange={(e) => update({ color: e.target.value })}
-            placeholder={DEFAULT_TEXT_COLOR}
-          />
-        </div>
-      )}
-    </>
+    <Field label="Text color">
+      <Segmented
+        value={tone === "light" || tone === "dark" ? tone : "auto"}
+        onChange={(v) => update({ tone: v, color: undefined })}
+        options={[
+          { value: "auto", label: "Auto" },
+          { value: "light", label: "Light" },
+          { value: "dark", label: "Dark" },
+        ]}
+      />
+    </Field>
   );
 }
 
 const alignOptions: { value: Align; label: React.ReactNode }[] = [
-  { value: "start", label: <LucideIcon name="AlignLeft" className="mx-auto size-3.5" /> },
-  { value: "center", label: <LucideIcon name="AlignCenter" className="mx-auto size-3.5" /> },
-  { value: "end", label: <LucideIcon name="AlignRight" className="mx-auto size-3.5" /> },
+  { value: "start", label: <Icon name="AlignLeft" className="mx-auto size-3.5" /> },
+  { value: "center", label: <Icon name="AlignCenter" className="mx-auto size-3.5" /> },
+  { value: "end", label: <Icon name="AlignRight" className="mx-auto size-3.5" /> },
 ];
 
-function CtaEditor({
-  cta,
-  lang,
-  onChange,
-}: {
-  cta: Cta;
-  lang: Lang;
-  onChange: (c: Cta) => void;
-}) {
-  const set = (patch: Partial<Cta>) => onChange({ ...cta, ...patch });
-  const destinationHint: Record<string, string> = {
-    internal: "/ar/cars/toyota",
-    external: "https://partner.com",
-    scroll: "#lead-form",
-    app: "q84sale://listing/123",
-    search: "/ar/search?category=cars&make=toyota",
+/** Plain-language description of where a link goes, shown under the field. */
+const ACTION_HINT: Record<Cta["action"], string> = {
+  scroll: "Scrolls to a section on this page.",
+  search: "Opens filtered search results on 4Sale.",
+  internal: "Opens another page on q84sale.com.",
+  external: "Opens another website in a new tab.",
+  app: "Opens the 4Sale app, falling back to the website.",
+};
+
+function CtaEditor({ cta, lang, onChange }: { cta: Cta; lang: Lang; onChange: (c: Cta) => void }) {
+  /*
+   * The action is recomputed from the destination on every edit rather than
+   * picked from a list. It still has to be stored — published pages carry it as
+   * `data-fs-action` — but asking an editor to classify their own URL was both
+   * a developer's question and a way for the two fields to contradict each
+   * other.
+   */
+  const set = (patch: Partial<Cta>) => {
+    const next = { ...cta, ...patch };
+    onChange({ ...next, action: ctaAction(next.destination, cta.action) });
   };
+  const action = ctaAction(cta.destination, cta.action);
+
   return (
     <>
       <Field label="Button label">
         <LInput value={cta.label} lang={lang} onChange={(v) => set({ label: v })} />
       </Field>
-      <Field label="Action type">
-        <SelectInput
-          value={cta.action}
-          onChange={(v) => set({ action: v as Cta["action"] })}
-          options={[
-            { value: "internal", label: "Internal 4Sale URL" },
-            { value: "external", label: "External URL" },
-            { value: "scroll", label: "Scroll to section / form" },
-            { value: "app", label: "App deep link" },
-            { value: "search", label: "Category / search results" },
-          ]}
+      {/*
+        The same 4Sale icon set the page elements draw from, so a button and a
+        feature list can carry the same glyph. "No icon" leads the grid — 238 of
+        q84sale.com's own 333 buttons are text-only.
+      */}
+      <Field label="Symbol">
+        <IconPicker value={cta.icon ?? "none"} onChange={(v) => set({ icon: v })} allowNone />
+      </Field>
+      <Field label="Corner radius">
+        <SliderInput
+          value={ctaRadius(cta.radius)}
+          min={0}
+          max={CTA_RADIUS_MAX}
+          step={2}
+          onChange={(v) => set({ radius: v })}
         />
       </Field>
-      <Field label="Destination">
+      <Field label="Link">
         <TextInput
           value={cta.destination}
-          placeholder={destinationHint[cta.action]}
+          placeholder="#lead-form  ·  /ar/cars/toyota  ·  https://…"
           onChange={(e) => set({ destination: e.target.value })}
         />
       </Field>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">{ACTION_HINT[action]}</p>
       <Field label="Tracking event name">
         <TextInput value={cta.event} onChange={(e) => set({ event: e.target.value })} />
       </Field>
+      {/*
+        Three palette styles and no colour picker. Each already carries its own
+        label colour, so there is nothing left for an editor to get wrong —
+        and no way to ship a button that isn't 4Sale blue.
+      */}
       <Field label="Style">
         <Segmented
-          value={cta.variant}
-          onChange={(v) =>
-            set(
-              v === "custom"
-                ? { variant: v, color: cta.color || DEFAULT_CTA_COLOR, textTone: "auto" }
-                : { variant: v as Cta["variant"] },
-            )
-          }
+          value={ctaVariant(cta.variant)}
+          onChange={(v) => set({ variant: v as Cta["variant"] })}
           options={[
             { value: "primary", label: "Primary" },
             { value: "secondary", label: "Soft" },
             { value: "inverse", label: "On blue" },
-            { value: "custom", label: "Custom" },
           ]}
         />
       </Field>
-      {cta.variant === "custom" && (
-        <>
-          <Field label="Button color">
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={cta.color || DEFAULT_CTA_COLOR}
-                onChange={(e) => set({ color: e.target.value })}
-                className="size-9 shrink-0 cursor-pointer rounded-lg border border-border bg-background"
-              />
-              <TextInput
-                value={cta.color || DEFAULT_CTA_COLOR}
-                onChange={(e) => set({ color: e.target.value })}
-                placeholder={DEFAULT_CTA_COLOR}
-              />
-            </div>
-          </Field>
-          <Field label="Label color">
-            <Segmented
-              value={cta.textTone ?? "auto"}
-              onChange={(v) =>
-                set(
-                  v === "custom"
-                    ? {
-                        textTone: "custom",
-                        textColor: cta.textColor || DEFAULT_CTA_TEXT_COLOR,
-                      }
-                    : { textTone: v as Cta["textTone"] },
-                )
-              }
-              options={[
-                { value: "auto", label: "Auto" },
-                { value: "light", label: "Light" },
-                { value: "dark", label: "Dark" },
-                { value: "custom", label: "Custom" },
-              ]}
-            />
-          </Field>
-          {cta.textTone === "custom" && (
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={cta.textColor || DEFAULT_CTA_TEXT_COLOR}
-                onChange={(e) => set({ textColor: e.target.value })}
-                className="size-9 shrink-0 cursor-pointer rounded-lg border border-border bg-background"
-              />
-              <TextInput
-                value={cta.textColor || DEFAULT_CTA_TEXT_COLOR}
-                onChange={(e) => set({ textColor: e.target.value })}
-                placeholder={DEFAULT_CTA_TEXT_COLOR}
-              />
-            </div>
-          )}
-        </>
-      )}
+    </>
+  );
+}
+
+/**
+ * Icon colour controls, shared by the icon row and the cards block.
+ *
+ * Both draw a glyph in a chip, so both need the same three questions answered —
+ * background treatment, then which palette ramp. Kept in one component so the
+ * two blocks cannot drift into offering different colours.
+ */
+function IconToneFields({
+  g,
+  update,
+  fallback = "plain",
+}: {
+  g: <T>(k: string) => T;
+  update: (patch: Record<string, unknown>) => void;
+  /** What a block with no stored treatment looked like before it was a choice. */
+  fallback?: IconStyle;
+}) {
+  const style = iconStyle(g<string>("style"), fallback);
+  return (
+    <>
+      <Field label="Icon background">
+        <Segmented
+          value={style}
+          onChange={(v) => update({ style: v })}
+          options={[
+            { value: "plain", label: "None" },
+            { value: "soft", label: "Tinted" },
+            { value: "solid", label: "Filled" },
+          ]}
+        />
+      </Field>
+      {/*
+        Palette swatches rather than a colour input. Each shows the tone in the
+        treatment currently chosen, so the pick is made by looking at the thing
+        itself — and there is no way to choose a colour that isn't 4Sale's.
+      */}
+      <Field label="Icon colour">
+        <div className="flex flex-wrap gap-1.5">
+          {ICON_TONES.map((tone) => {
+            const active = iconTone(g<string>("tone")) === tone;
+            return (
+              <button
+                key={tone}
+                type="button"
+                title={tone}
+                onClick={() => update({ tone })}
+                className={cn(
+                  "flex size-8 items-center justify-center rounded-full transition-all",
+                  // A `plain` tone has no chip to show, so the swatch borrows
+                  // the tinted pairing to stay visible as a swatch.
+                  ICON_TONE_CLASS[tone][style === "plain" ? "soft" : style],
+                  active
+                    ? "ring-2 ring-brand ring-offset-2 ring-offset-background"
+                    : "hover:opacity-80",
+                )}
+              >
+                <Icon name="Check" className={cn("size-3.5", !active && "opacity-0")} />
+              </button>
+            );
+          })}
+        </div>
+      </Field>
     </>
   );
 }
@@ -249,7 +262,12 @@ function ElementEditor({
       return (
         <>
           <Field label="Content">
-            <LInput value={g<LText>("text")} lang={lang} onChange={(v) => update({ text: v })} multiline />
+            <LInput
+              value={g<LText>("text")}
+              lang={lang}
+              onChange={(v) => update({ text: v })}
+              multiline
+            />
           </Field>
           <Field label="Level">
             <Segmented
@@ -263,28 +281,51 @@ function ElementEditor({
             />
           </Field>
           <Field label="Alignment">
-            <Segmented value={g<Align>("align")} onChange={(v) => update({ align: v })} options={alignOptions} />
+            <Segmented
+              value={g<Align>("align")}
+              onChange={(v) => update({ align: v })}
+              options={alignOptions}
+            />
           </Field>
-          <TextColorField tone={g<string>("tone")} color={g<string>("color")} update={update} />
+          <TextColorField tone={g<string>("tone")} update={update} />
         </>
       );
     case "text":
       return (
         <>
           <Field label="Content">
-            <LInput value={g<LText>("text")} lang={lang} onChange={(v) => update({ text: v })} multiline />
+            <LInput
+              value={g<LText>("text")}
+              lang={lang}
+              onChange={(v) => update({ text: v })}
+              multiline
+            />
           </Field>
           <Field label="Alignment">
-            <Segmented value={g<Align>("align")} onChange={(v) => update({ align: v })} options={alignOptions} />
+            <Segmented
+              value={g<Align>("align")}
+              onChange={(v) => update({ align: v })}
+              options={alignOptions}
+            />
           </Field>
-          <TextColorField tone={g<string>("tone")} color={g<string>("color")} update={update} />
+          <Field label="Style">
+            <Segmented
+              value={textWeight(g<string>("weight"))}
+              onChange={(v) => update({ weight: v as TextWeight })}
+              options={[
+                { value: "regular", label: "Regular" },
+                { value: "bold", label: "Bold" },
+              ]}
+            />
+          </Field>
+          <TextColorField tone={g<string>("tone")} update={update} />
         </>
       );
     case "image":
       return (
         <>
           <div className="rounded-xl border border-dashed border-border bg-neutral-surface p-4 text-center">
-            <LucideIcon name="UploadCloud" className="mx-auto size-5 text-brand" />
+            <Icon name="UploadCloud" className="mx-auto size-5 text-brand" />
             <p className="mt-1.5 text-xs font-medium">Upload image</p>
             <p className="text-[10px] text-muted-foreground">Prototype: asset upload is mocked</p>
           </div>
@@ -299,10 +340,20 @@ function ElementEditor({
             <LInput value={g<LText>("alt")} lang={lang} onChange={(v) => update({ alt: v })} />
           </Field>
           <Field label="Height">
-            <SliderInput value={g<number>("height")} min={120} max={640} step={20} onChange={(v) => update({ height: v })} />
+            <SliderInput
+              value={g<number>("height")}
+              min={120}
+              max={640}
+              step={20}
+              onChange={(v) => update({ height: v })}
+            />
           </Field>
           <Field label="Alignment">
-            <Segmented value={g<Align>("align")} onChange={(v) => update({ align: v })} options={alignOptions} />
+            <Segmented
+              value={g<Align>("align")}
+              onChange={(v) => update({ align: v })}
+              options={alignOptions}
+            />
           </Field>
         </>
       );
@@ -312,21 +363,29 @@ function ElementEditor({
         update({ items: items.map((it, idx) => (idx === i ? { ...it, ...patch } : it)) });
       return (
         <>
+          <IconToneFields g={g} update={update} fallback="soft" />
           {items.map((it, i) => (
             <div key={i} className="space-y-2 rounded-xl border border-border p-3">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-muted-foreground">Card {i + 1}</span>
+                <span className="text-[11px] font-semibold text-muted-foreground">
+                  Card {i + 1}
+                </span>
                 <button
                   type="button"
                   className="text-muted-foreground hover:text-destructive"
                   onClick={() => update({ items: items.filter((_, idx) => idx !== i) })}
                 >
-                  <LucideIcon name="Trash2" className="size-3.5" />
+                  <Icon name="Trash2" className="size-3.5" />
                 </button>
               </div>
-              <TextInput value={it.icon} onChange={(e) => setItem(i, { icon: e.target.value })} placeholder="Lucide icon" />
+              <IconPicker value={it.icon} onChange={(v) => setItem(i, { icon: v })} />
               <LInput value={it.title} lang={lang} onChange={(v) => setItem(i, { title: v })} />
-              <LInput value={it.body} lang={lang} onChange={(v) => setItem(i, { body: v })} multiline />
+              <LInput
+                value={it.body}
+                lang={lang}
+                onChange={(v) => setItem(i, { body: v })}
+                multiline
+              />
             </div>
           ))}
           <button
@@ -335,7 +394,11 @@ function ElementEditor({
               update({
                 items: [
                   ...items,
-                  { icon: "BadgeCheck", title: { en: "New card", ar: "بطاقة جديدة" }, body: { en: "", ar: "" } },
+                  {
+                    icon: "badgeCheck",
+                    title: { en: "New card", ar: "بطاقة جديدة" },
+                    body: { en: "", ar: "" },
+                  },
                 ],
               })
             }
@@ -348,23 +411,69 @@ function ElementEditor({
     }
     case "icons": {
       const items = g<{ icon: string; label: LText }[]>("items") || [];
+      const setItem = (i: number, patch: Partial<(typeof items)[number]>) =>
+        update({ items: items.map((it, idx) => (idx === i ? { ...it, ...patch } : it)) });
       return (
         <>
+          {/*
+            Row wraps the pairs inline; List stacks them one per line, which is
+            what a page needs for a tick-list of features — the shape
+            q84sale.com's own business-profile page uses.
+          */}
+          <Field label="Arrangement">
+            <Segmented
+              value={iconsLayout(g<string>("layout"))}
+              onChange={(v) => update({ layout: v })}
+              options={[
+                { value: "row", label: "Row" },
+                { value: "list", label: "List" },
+              ]}
+            />
+          </Field>
+          {/* One size for both, since the label is set at the icon's size. */}
+          <Field label="Icon and text size">
+            <SliderInput
+              value={iconsSize(g<number>("size"))}
+              min={14}
+              max={40}
+              step={2}
+              onChange={(v) => update({ size: v })}
+            />
+          </Field>
+          <IconToneFields g={g} update={update} />
           {items.map((it, i) => (
             <div key={i} className="space-y-2 rounded-xl border border-border p-3">
-              <TextInput
-                value={it.icon}
-                onChange={(e) =>
-                  update({ items: items.map((x, idx) => (idx === i ? { ...x, icon: e.target.value } : x)) })
-                }
-              />
-              <LInput
-                value={it.label}
-                lang={lang}
-                onChange={(v) => update({ items: items.map((x, idx) => (idx === i ? { ...x, label: v } : x)) })}
-              />
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-muted-foreground">
+                  Item {i + 1}
+                </span>
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-destructive"
+                  onClick={() => update({ items: items.filter((_, idx) => idx !== i) })}
+                >
+                  <Icon name="Trash2" className="size-3.5" />
+                </button>
+              </div>
+              <IconPicker value={it.icon} onChange={(v) => setItem(i, { icon: v })} />
+              <LInput value={it.label} lang={lang} onChange={(v) => setItem(i, { label: v })} />
             </div>
           ))}
+          <button
+            type="button"
+            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-border py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-brand hover:text-brand"
+            onClick={() =>
+              update({
+                items: [
+                  ...items,
+                  { icon: "badgeCheck", label: { en: "New item", ar: "عنصر جديد" } },
+                ],
+              })
+            }
+          >
+            <Icon name="Plus" className="size-3.5" />
+            Add item
+          </button>
         </>
       );
     }
@@ -377,7 +486,11 @@ function ElementEditor({
             onChange={(c) => update({ ...c })}
           />
           <Field label="Alignment">
-            <Segmented value={g<Align>("align")} onChange={(v) => update({ align: v })} options={alignOptions} />
+            <Segmented
+              value={g<Align>("align")}
+              onChange={(v) => update({ align: v })}
+              options={alignOptions}
+            />
           </Field>
         </>
       );
@@ -388,7 +501,12 @@ function ElementEditor({
             <LInput value={g<LText>("title")} lang={lang} onChange={(v) => update({ title: v })} />
           </Field>
           <Field label="Subtitle">
-            <LInput value={g<LText>("subtitle")} lang={lang} onChange={(v) => update({ subtitle: v })} multiline />
+            <LInput
+              value={g<LText>("subtitle")}
+              lang={lang}
+              onChange={(v) => update({ subtitle: v })}
+              multiline
+            />
           </Field>
           <div className="rounded-xl bg-neutral-surface p-3">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -409,22 +527,36 @@ function ElementEditor({
           {items.map((it, i) => (
             <div key={i} className="space-y-2 rounded-xl border border-border p-3">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-muted-foreground">Step {i + 1}</span>
+                <span className="text-[11px] font-semibold text-muted-foreground">
+                  Step {i + 1}
+                </span>
                 <button
                   type="button"
                   className="text-muted-foreground hover:text-destructive"
                   onClick={() => update({ items: items.filter((_, idx) => idx !== i) })}
                 >
-                  <LucideIcon name="Trash2" className="size-3.5" />
+                  <Icon name="Trash2" className="size-3.5" />
                 </button>
               </div>
               <LInput value={it.title} lang={lang} onChange={(v) => setItem(i, { title: v })} />
-              <LInput value={it.body} lang={lang} onChange={(v) => setItem(i, { body: v })} multiline />
+              <LInput
+                value={it.body}
+                lang={lang}
+                onChange={(v) => setItem(i, { body: v })}
+                multiline
+              />
             </div>
           ))}
           <button
             type="button"
-            onClick={() => update({ items: [...items, { title: { en: "New step", ar: "خطوة" }, body: { en: "", ar: "" } }] })}
+            onClick={() =>
+              update({
+                items: [
+                  ...items,
+                  { title: { en: "New step", ar: "خطوة" }, body: { en: "", ar: "" } },
+                ],
+              })
+            }
             className="w-full rounded-lg border border-dashed border-border py-2 text-xs font-medium hover:border-brand hover:text-brand"
           >
             + Add step
@@ -446,7 +578,11 @@ function ElementEditor({
           ))}
           <button
             type="button"
-            onClick={() => update({ items: [...items, { q: { en: "Question", ar: "سؤال" }, a: { en: "", ar: "" } }] })}
+            onClick={() =>
+              update({
+                items: [...items, { q: { en: "Question", ar: "سؤال" }, a: { en: "", ar: "" } }],
+              })
+            }
             className="w-full rounded-lg border border-dashed border-border py-2 text-xs font-medium hover:border-brand hover:text-brand"
           >
             + Add question
@@ -464,20 +600,27 @@ function ElementEditor({
             <LInput value={g<LText>("title")} lang={lang} onChange={(v) => update({ title: v })} />
           </Field>
           <Field label="Anchor ID (for scroll CTAs)">
-            <TextInput value={g<string>("anchor")} onChange={(e) => update({ anchor: e.target.value })} />
+            <TextInput
+              value={g<string>("anchor")}
+              onChange={(e) => update({ anchor: e.target.value })}
+            />
           </Field>
           <div className="space-y-2">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Fields</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Fields
+            </p>
             {fields.map((f, i) => (
               <div key={f.id} className="space-y-2 rounded-xl border border-border p-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-muted-foreground">Field {i + 1}</span>
+                  <span className="text-[11px] font-semibold text-muted-foreground">
+                    Field {i + 1}
+                  </span>
                   <button
                     type="button"
                     className="text-muted-foreground hover:text-destructive"
                     onClick={() => update({ fields: fields.filter((_, idx) => idx !== i) })}
                   >
-                    <LucideIcon name="Trash2" className="size-3.5" />
+                    <Icon name="Trash2" className="size-3.5" />
                   </button>
                 </div>
                 <LInput value={f.label} lang={lang} onChange={(v) => setField(i, { label: v })} />
@@ -499,7 +642,11 @@ function ElementEditor({
                     onChange={(e) => setField(i, { options: e.target.value })}
                   />
                 )}
-                <Toggle label="Required" checked={f.required} onChange={(v) => setField(i, { required: v })} />
+                <Toggle
+                  label="Required"
+                  checked={f.required}
+                  onChange={(v) => setField(i, { required: v })}
+                />
               </div>
             ))}
             <button
@@ -508,7 +655,12 @@ function ElementEditor({
                 update({
                   fields: [
                     ...fields,
-                    { id: uid(), label: { en: "New field", ar: "حقل جديد" }, type: "text", required: false },
+                    {
+                      id: uid(),
+                      label: { en: "New field", ar: "حقل جديد" },
+                      type: "text",
+                      required: false,
+                    },
                   ],
                 })
               }
@@ -518,10 +670,19 @@ function ElementEditor({
             </button>
           </div>
           <Field label="Submit button label">
-            <LInput value={g<LText>("submitLabel")} lang={lang} onChange={(v) => update({ submitLabel: v })} />
+            <LInput
+              value={g<LText>("submitLabel")}
+              lang={lang}
+              onChange={(v) => update({ submitLabel: v })}
+            />
           </Field>
           <Field label="Success message">
-            <LInput value={g<LText>("success")} lang={lang} onChange={(v) => update({ success: v })} multiline />
+            <LInput
+              value={g<LText>("success")}
+              lang={lang}
+              onChange={(v) => update({ success: v })}
+              multiline
+            />
           </Field>
           <Field label="Redirect after submit (optional)">
             <TextInput
@@ -540,12 +701,28 @@ function ElementEditor({
             <LInput value={g<LText>("title")} lang={lang} onChange={(v) => update({ title: v })} />
           </Field>
           <ListingsEditor props={p} lang={lang} update={update} />
+          <Toggle
+            label="Enable CTA"
+            checked={readCardCtas(g("cardCtas"))}
+            onChange={(on) => update({ cardCtas: on })}
+          />
+          {readCardCtas(g("cardCtas")) ? (
+            <p className="text-[11px] text-muted-foreground">
+              Call, WhatsApp and Chat are showing on each card.
+            </p>
+          ) : null}
         </>
       );
     case "spacer":
       return (
         <Field label="Height">
-          <SliderInput value={g<number>("height")} min={8} max={160} step={8} onChange={(v) => update({ height: v })} />
+          <SliderInput
+            value={g<number>("height")}
+            min={8}
+            max={160}
+            step={8}
+            onChange={(v) => update({ height: v })}
+          />
         </Field>
       );
     case "video":
@@ -585,7 +762,7 @@ export function PropertiesPanel({
   if (!container) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-        <LucideIcon name="MousePointerSquareDashed" className="size-6 text-muted-foreground" />
+        <Icon name="MousePointerSquareDashed" className="size-6 text-muted-foreground" />
         <p className="text-sm font-medium">Nothing selected</p>
         <p className="text-xs text-muted-foreground">
           Click a container or element on the canvas to edit its properties.
@@ -611,14 +788,24 @@ export function PropertiesPanel({
               <>
                 <IconBtn icon="ArrowUp" onClick={() => onMoveElement(-1)} />
                 <IconBtn icon="ArrowDown" onClick={() => onMoveElement(1)} />
-                <IconBtn icon="Trash2" danger onClick={onDeleteElement} />
+                <IconBtn
+                  icon="Trash2"
+                  danger
+                  title="Delete (Delete or Backspace)"
+                  onClick={onDeleteElement}
+                />
               </>
             ) : (
               <>
                 <IconBtn icon="ArrowUp" onClick={() => onMoveContainer(-1)} />
                 <IconBtn icon="ArrowDown" onClick={() => onMoveContainer(1)} />
                 <IconBtn icon="Copy" onClick={onDuplicateContainer} />
-                <IconBtn icon="Trash2" danger onClick={onDeleteContainer} />
+                <IconBtn
+                  icon="Trash2"
+                  danger
+                  title="Delete (Delete or Backspace)"
+                  onClick={onDeleteContainer}
+                />
               </>
             )}
           </div>
@@ -633,18 +820,46 @@ export function PropertiesPanel({
         <>
           <Section title="Layout">
             <Field label="Container name">
-              <TextInput value={container.name} onChange={(e) => updateContainer({ name: e.target.value })} />
+              <TextInput
+                value={container.name}
+                onChange={(e) => updateContainer({ name: e.target.value })}
+              />
             </Field>
-            <Field label="Column layout">
+            <Field label="Direction">
+              <Segmented
+                value={containerDirection(container.direction)}
+                onChange={(v) => updateContainer({ direction: v })}
+                options={[
+                  { value: "horizontal", label: "Horizontal" },
+                  { value: "vertical", label: "Vertical" },
+                ]}
+              />
+            </Field>
+            <Field
+              label={
+                containerDirection(container.direction) === "vertical"
+                  ? "Row layout"
+                  : "Column layout"
+              }
+            >
               <SelectInput
                 value={container.layout}
                 onChange={(v) => updateContainer({ layout: v as ContainerLayout })}
                 options={(Object.keys(LAYOUT_LABEL) as ContainerLayout[]).map((k) => ({
                   value: k,
-                  label: LAYOUT_LABEL[k],
+                  label: layoutLabel(k, container.direction),
                 }))}
               />
             </Field>
+            {containerTracks(container).length > 1 ? (
+              <p className="text-[11px] text-muted-foreground">
+                Split{" "}
+                {containerTracks(container)
+                  .map((n) => `${Math.round(n)}%`)
+                  .join(" / ")}{" "}
+                — drag the divider on the canvas to change it.
+              </p>
+            ) : null}
             <Field label="Content width">
               <SelectInput
                 value={container.contentWidth}
@@ -672,17 +887,38 @@ export function PropertiesPanel({
           <Section title="Design">
             <BackgroundEditor container={container} updateContainer={updateContainer} />
             <Field label="Vertical padding">
-              <SliderInput value={container.paddingY} onChange={(v) => updateContainer({ paddingY: v })} />
+              <SliderInput
+                value={container.paddingY}
+                onChange={(v) => updateContainer({ paddingY: v })}
+              />
+            </Field>
+            <Field label="Min height">
+              <SliderInput
+                value={container.minHeight ?? 0}
+                min={0}
+                max={800}
+                step={8}
+                onChange={(v) => updateContainer({ minHeight: v || undefined })}
+              />
             </Field>
             <Field label="Column spacing">
-              <SliderInput value={container.gap} max={80} onChange={(v) => updateContainer({ gap: v })} />
+              <SliderInput
+                value={container.gap}
+                max={80}
+                onChange={(v) => updateContainer({ gap: v })}
+              />
             </Field>
             <Field label="Border radius">
-              <SliderInput value={container.radius} max={48} onChange={(v) => updateContainer({ radius: v })} />
+              <SliderInput
+                value={container.radius}
+                max={48}
+                onChange={(v) => updateContainer({ radius: v })}
+              />
             </Field>
             <div className="flex items-start gap-2 rounded-lg bg-brand-soft p-2.5 text-[11px] text-brand">
-              <LucideIcon name="Smartphone" className="mt-0.5 size-3.5 shrink-0" />
-              Columns stack automatically on mobile — responsive behaviour is enforced by the system.
+              <Icon name="Smartphone" className="mt-0.5 size-3.5 shrink-0" />
+              Columns stack automatically on mobile — responsive behaviour is enforced by the
+              system.
             </div>
           </Section>
         </>
@@ -691,7 +927,12 @@ export function PropertiesPanel({
   );
 }
 
-/** Background picker: brand preset, any colour, or an image with a readability scrim. */
+/**
+ * Background picker: the four 4Sale presets, or an image with a readability
+ * scrim. There is no free colour — a page built here is embedded in
+ * q84sale.com, so a section that can be any hex is a section that can stop
+ * looking like 4Sale.
+ */
 function BackgroundEditor({
   container,
   updateContainer,
@@ -700,12 +941,10 @@ function BackgroundEditor({
   updateContainer: (patch: Partial<Container>) => void;
 }) {
   const bg = container.bg;
-  const mode: "preset" | "color" | "image" = bg?.type ?? "preset";
+  const mode: "preset" | "image" = bg?.type === "image" ? "image" : "preset";
 
-  const setMode = (m: "preset" | "color" | "image") => {
+  const setMode = (m: "preset" | "image") => {
     if (m === "preset") return updateContainer({ bg: undefined, textTone: "auto" });
-    if (m === "color")
-      return updateContainer({ bg: { type: "color", color: "#1d4aff" }, textTone: "auto" });
     updateContainer({
       bg: { type: "image", src: "", size: "cover", position: "center", overlay: 35 },
       textTone: "auto",
@@ -732,18 +971,19 @@ function BackgroundEditor({
           value={mode}
           onChange={setMode}
           options={[
-            { value: "preset", label: "Preset" },
-            { value: "color", label: "Color" },
-            { value: "image", label: "Image" },
+            { value: "preset", label: "Color" },
+            { value: "image", label: "image" },
           ]}
         />
       </Field>
 
       {mode === "preset" && (
-        <Field label="Preset">
+        <Field label="Color">
           <Segmented
             value={container.background}
-            onChange={(v) => updateContainer({ background: v })}
+            onChange={(v) =>
+              updateContainer({ background: v as Container["background"], bg: undefined })
+            }
             options={[
               { value: "white", label: "White" },
               { value: "soft", label: "Light blue" },
@@ -751,24 +991,6 @@ function BackgroundEditor({
               { value: "brand", label: "Blue" },
             ]}
           />
-        </Field>
-      )}
-
-      {bg?.type === "color" && (
-        <Field label="Color">
-          <div className="flex items-center gap-2">
-            <input
-              type="color"
-              value={bg.color}
-              onChange={(e) => updateContainer({ bg: { type: "color", color: e.target.value } })}
-              className="size-9 shrink-0 cursor-pointer rounded-lg border border-border bg-background"
-            />
-            <TextInput
-              value={bg.color}
-              onChange={(e) => updateContainer({ bg: { type: "color", color: e.target.value } })}
-              placeholder="#1d4aff"
-            />
-          </div>
         </Field>
       )}
 
@@ -791,14 +1013,14 @@ function BackgroundEditor({
                 if (f) readFile(f);
               }}
             />
-            <LucideIcon name="UploadCloud" className="mx-auto size-4 text-brand" />
+            <Icon name="UploadCloud" className="mx-auto size-4 text-brand" />
             <span className="mt-1 block text-[11px] font-medium">
               {bg.src.startsWith("data:") ? "Replace uploaded image" : "Upload from computer"}
             </span>
           </label>
           {bg.src.startsWith("data:") && (
             <div className="flex items-start gap-2 rounded-lg bg-amber-100 p-2.5 text-[11px] text-amber-800">
-              <LucideIcon name="TriangleAlert" className="mt-0.5 size-3.5 shrink-0" />
+              <Icon name="AlertTriangle" className="mt-0.5 size-3.5 shrink-0" />
               Preview only — uploaded files aren’t hosted yet, so this image won’t appear on the
               published page. Use a URL for anything you intend to publish.
             </div>
@@ -858,21 +1080,24 @@ function IconBtn({
   icon,
   onClick,
   danger,
+  title,
 }: {
   icon: string;
   onClick: () => void;
-  danger?: boolean;
+  danger?: boolean | undefined;
+  title?: string | undefined;
 }) {
   return (
     <button
       type="button"
+      title={title}
       onClick={onClick}
       className={
         "rounded-md border border-border p-1.5 text-muted-foreground transition hover:bg-neutral-surface " +
         (danger ? "hover:border-destructive hover:text-destructive" : "hover:text-brand")
       }
     >
-      <LucideIcon name={icon} className="size-3.5" />
+      <Icon name={icon} className="size-3.5" />
     </button>
   );
 }

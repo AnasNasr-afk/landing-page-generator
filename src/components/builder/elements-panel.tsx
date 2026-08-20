@@ -1,15 +1,16 @@
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { ELEMENT_LIBRARY } from "@/lib/builder-content";
-import { LAYOUT_LABEL, type ContainerLayout, type ElementType } from "@/lib/builder-types";
-import { LucideIcon } from "./renderer";
+import {
+  LAYOUT_SPLIT,
+  layoutLabel,
+  type ContainerDirection,
+  type ContainerLayout,
+  type ElementType,
+} from "@/lib/builder-types";
+import { UiIcon as Icon } from "./ui-icon";
 
-const LAYOUTS: { key: ContainerLayout; cols: number[] }[] = [
-  { key: "1", cols: [1] },
-  { key: "50-50", cols: [1, 1] },
-  { key: "35-65", cols: [35, 65] },
-  { key: "65-35", cols: [65, 35] },
-  { key: "3", cols: [1, 1, 1] },
-];
+const LAYOUTS: ContainerLayout[] = ["1", "50-50", "35-65", "65-35", "3"];
 
 export function ElementsPanel({
   onAddContainer,
@@ -19,7 +20,7 @@ export function ElementsPanel({
   onDragElement,
   onDragEnd,
 }: {
-  onAddContainer: (layout: ContainerLayout) => void;
+  onAddContainer: (layout: ContainerLayout, direction: ContainerDirection) => void;
   onAddElement: (type: ElementType) => void;
   canAddElement: boolean;
   targetLabel: string;
@@ -27,6 +28,8 @@ export function ElementsPanel({
   onDragElement: (type: ElementType) => void;
   onDragEnd: () => void;
 }) {
+  const [direction, setDirection] = useState<ContainerDirection>("horizontal");
+
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border px-4 py-3">
@@ -43,24 +46,35 @@ export function ElementsPanel({
           <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Containers
           </h4>
-          <div className="space-y-2">
-            {LAYOUTS.map((l) => (
+          <div className="flex rounded-full bg-neutral-surface p-[3px]">
+            {(["horizontal", "vertical"] as const).map((d) => (
               <button
-                key={l.key}
+                key={d}
                 type="button"
-                onClick={() => onAddContainer(l.key)}
-                className="group flex w-full items-center gap-3 rounded-xl border border-border bg-background p-2.5 text-start transition hover:border-brand hover:shadow-card"
+                onClick={() => setDirection(d)}
+                className={cn(
+                  "flex-1 rounded-full py-1.5 text-[13px] font-medium capitalize transition",
+                  direction === d
+                    ? "bg-background text-brand shadow-panel"
+                    : "text-muted-foreground",
+                )}
               >
-                <div className="flex h-8 w-16 gap-1 rounded-md bg-neutral-surface p-1">
-                  {l.cols.map((c, i) => (
-                    <div
-                      key={i}
-                      style={{ flexGrow: c }}
-                      className="rounded-sm bg-brand/20 group-hover:bg-brand/40"
-                    />
-                  ))}
-                </div>
-                <span className="text-xs font-medium">{LAYOUT_LABEL[l.key]}</span>
+                {d}
+              </button>
+            ))}
+          </div>
+          <div className="mt-2.5 flex flex-col gap-2">
+            {LAYOUTS.map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => onAddContainer(key, direction)}
+                className="flex w-full items-center gap-3 rounded-[10px] border border-border bg-background px-3 py-2.5 text-start transition hover:border-brand/40"
+              >
+                <LayoutThumb layout={key} vertical={direction === "vertical"} />
+                <span className="text-[13px] font-medium leading-none text-foreground">
+                  {layoutLabel(key, direction)}
+                </span>
               </button>
             ))}
           </div>
@@ -92,7 +106,7 @@ export function ElementsPanel({
                     !canAddElement && "opacity-80",
                   )}
                 >
-                  <LucideIcon name={item.icon} className="size-4 text-brand" />
+                  <Icon name={item.icon} className="size-4 text-brand" />
                   <span className="text-xs font-semibold leading-tight">{item.label}</span>
                   <span className="text-[10px] leading-tight text-muted-foreground">{item.hint}</span>
                 </button>
@@ -101,6 +115,35 @@ export function ElementsPanel({
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Thumbnail for a container split. Frame size is fixed so every card lines up;
+ * only the bars inside change with the layout.
+ */
+function LayoutThumb({
+  layout,
+  vertical,
+}: {
+  layout: ContainerLayout;
+  vertical: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "shrink-0 rounded-md bg-neutral-surface p-[3px]",
+        vertical ? "flex h-10 w-10 flex-col gap-[3px]" : "flex h-[30px] w-16 gap-[3px]",
+      )}
+    >
+      {LAYOUT_SPLIT[layout].map((weight, i) => (
+        <div
+          key={i}
+          style={{ flexGrow: weight, flexBasis: 0 }}
+          className="min-h-0 min-w-0 rounded-[3px] bg-brand/25"
+        />
+      ))}
     </div>
   );
 }

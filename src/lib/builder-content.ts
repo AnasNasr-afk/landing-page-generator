@@ -6,6 +6,7 @@ import {
   type LandingPage,
   type PageElement,
   type Template,
+  defaultTracks,
   uid,
 } from "./builder-types";
 
@@ -62,6 +63,7 @@ export function defaultProps(type: ElementType): Record<string, unknown> {
           "أضف نصاً يوضح قيمة هذا القسم.",
         ),
         align: "start",
+        weight: "regular",
       };
     case "image":
       return { src: "", alt: L("Describe the image", "وصف الصورة"), height: 320, align: "center" };
@@ -70,18 +72,28 @@ export function defaultProps(type: ElementType): Record<string, unknown> {
     case "cards":
       return {
         columns: 3,
+        // Same defaults the icon row uses, so the two blocks start matching.
+        style: "soft",
+        tone: "brand",
         items: [1, 2, 3].map((n) => ({
-          icon: "BadgeCheck",
+          icon: "badgeCheck",
           title: L(`Benefit ${n}`, `الميزة ${n}`),
           body: L("Short description of this benefit.", "وصف مختصر لهذه الميزة."),
         })),
       };
     case "icons":
+      // `row` and 16px match what this block rendered before either was
+      // configurable, so a block dropped today looks like the ones already on
+      // saved pages — which read a missing value as exactly these.
       return {
+        layout: "row",
+        size: 16,
+        style: "plain",
+        tone: "brand",
         items: [
-          { icon: "ShieldCheck", label: L("Verified", "موثّق") },
-          { icon: "Zap", label: L("Fast", "سريع") },
-          { icon: "Users", label: L("Trusted", "موثوق") },
+          { icon: "shieldCheck", label: L("Verified", "موثّق") },
+          { icon: "bolt", label: L("Fast", "سريع") },
+          { icon: "users", label: L("Trusted", "موثوق") },
         ],
       };
     case "cta":
@@ -90,6 +102,7 @@ export function defaultProps(type: ElementType): Record<string, unknown> {
         action: "scroll",
         destination: "#lead-form",
         event: "cta_click",
+        icon: "arrowRight",
         variant: "primary",
         align: "start",
       };
@@ -102,6 +115,7 @@ export function defaultProps(type: ElementType): Record<string, unknown> {
           action: "scroll",
           destination: "#lead-form",
           event: "cta_banner_click",
+          icon: "arrowRight",
           variant: "inverse",
         },
       };
@@ -110,12 +124,20 @@ export function defaultProps(type: ElementType): Record<string, unknown> {
         title: L("Request a Business Profile", "اطلب ملفاً تجارياً"),
         anchor: "lead-form",
         submitLabel: L("Submit request", "إرسال الطلب"),
-        success: L("Thanks! Our team will contact you shortly.", "شكراً! سيتواصل فريقنا معك قريباً."),
+        success: L(
+          "Thanks! Our team will contact you shortly.",
+          "شكراً! سيتواصل فريقنا معك قريباً.",
+        ),
         redirect: "",
         fields: [
           { id: uid(), label: L("Full name", "الاسم الكامل"), type: "text", required: true },
           { id: uid(), label: L("Phone number", "رقم الهاتف"), type: "phone", required: true },
-          { id: uid(), label: L("Business email", "البريد الإلكتروني"), type: "email", required: false },
+          {
+            id: uid(),
+            label: L("Business email", "البريد الإلكتروني"),
+            type: "email",
+            required: false,
+          },
           {
             id: uid(),
             label: L("Business category", "فئة النشاط"),
@@ -132,17 +154,22 @@ export function defaultProps(type: ElementType): Record<string, unknown> {
         ],
       };
     case "listings":
-      // `categoryPath` is the selected branch of the 4Sale category tree, root
-      // first; `filters` are the facets applied within it, keyed by field id;
-      // `items` is whatever the editor last previewed and applied. All start
-      // empty so a freshly dropped block shows placeholders until someone picks
-      // a category — see `src/lib/listings-api.ts`.
+      // `keyword` is what gets searched on 4Sale — the only query the Atlas
+      // search endpoint takes today; `items` is whatever the editor last
+      // previewed and applied. Both start empty so a freshly dropped block shows
+      // placeholders until someone runs a search — see `src/lib/listings-api.ts`.
       return {
         title: L("Featured listings", "إعلانات مميزة"),
-        categoryPath: [],
-        filters: {},
+        keyword: "",
         items: [],
         count: 4,
+        // Contact buttons on each card, as q84sale.com shows them. On by
+        // default because that is what a real listing grid looks like; an
+        // editor building a page that should send people somewhere else can
+        // turn them off. Blocks saved before this existed have no `cardCtas`
+        // key, and `readCardCtas` reads a missing value as on so they keep
+        // rendering the way they did.
+        cardCtas: true,
       };
     case "faq":
       return {
@@ -160,9 +187,18 @@ export function defaultProps(type: ElementType): Record<string, unknown> {
     case "steps":
       return {
         items: [
-          { title: L("Submit request", "أرسل الطلب"), body: L("Fill the short form.", "املأ النموذج القصير.") },
-          { title: L("Get reviewed", "تتم المراجعة"), body: L("Our team verifies your business.", "يقوم فريقنا بالتحقق.") },
-          { title: L("Go live", "انطلق"), body: L("Your profile is published.", "يتم نشر ملفك التجاري.") },
+          {
+            title: L("Submit request", "أرسل الطلب"),
+            body: L("Fill the short form.", "املأ النموذج القصير."),
+          },
+          {
+            title: L("Get reviewed", "تتم المراجعة"),
+            body: L("Our team verifies your business.", "يقوم فريقنا بالتحقق."),
+          },
+          {
+            title: L("Go live", "انطلق"),
+            body: L("Your profile is published.", "يتم نشر ملفك التجاري."),
+          },
         ],
       };
     case "spacer":
@@ -178,16 +214,22 @@ export const newElement = (type: ElementType): PageElement => ({
   props: defaultProps(type),
 });
 
-export const newContainer = (layout: Container["layout"], cols: number): Container => ({
+export const newContainer = (
+  layout: Container["layout"],
+  cols: number,
+  direction: Container["direction"] = "horizontal",
+): Container => ({
   id: uid(),
   name: "Container",
   layout,
+  direction,
   background: "white",
   paddingY: 64,
   gap: 32,
   radius: 0,
   contentWidth: "default",
   align: "start",
+  tracks: defaultTracks(layout),
   columns: Array.from({ length: cols }, () => []),
 });
 
@@ -223,7 +265,13 @@ export const businessProfileContainers = (): Container[] => [
           event: "hero_cta_business_profile",
         }),
       ],
-      [el("image", { src: "__hero__", alt: L("Business owner using 4Sale", "صاحب عمل يستخدم فورسيل"), height: 400 })],
+      [
+        el("image", {
+          src: "__hero__",
+          alt: L("Business owner using 4Sale", "صاحب عمل يستخدم فورسيل"),
+          height: 400,
+        }),
+      ],
     ],
   },
   {
@@ -240,19 +288,28 @@ export const businessProfileContainers = (): Container[] => [
         el("cards", {
           items: [
             {
-              icon: "BadgeCheck",
+              icon: "badgeCheck",
               title: L("Verified trust badge", "شارة توثيق"),
-              body: L("Buyers see a verified badge on every listing you post.", "يرى المشترون شارة التوثيق على كل إعلان."),
+              body: L(
+                "Buyers see a verified badge on every listing you post.",
+                "يرى المشترون شارة التوثيق على كل إعلان.",
+              ),
             },
             {
-              icon: "TrendingUp",
+              icon: "trendUp",
               title: L("More visibility", "ظهور أكبر"),
-              body: L("Priority placement in category and search results.", "أولوية الظهور في نتائج البحث والفئات."),
+              body: L(
+                "Priority placement in category and search results.",
+                "أولوية الظهور في نتائج البحث والفئات.",
+              ),
             },
             {
-              icon: "BarChart3",
+              icon: "barChart",
               title: L("Performance insights", "تحليلات الأداء"),
-              body: L("Track views, calls and chats from one dashboard.", "تابع المشاهدات والاتصالات من لوحة واحدة."),
+              body: L(
+                "Track views, calls and chats from one dashboard.",
+                "تابع المشاهدات والاتصالات من لوحة واحدة.",
+              ),
             },
           ],
         }),
@@ -264,7 +321,10 @@ export const businessProfileContainers = (): Container[] => [
     name: "Storefront",
     columns: [
       [
-        el("heading", { text: L("Your storefront, always open", "متجرك مفتوح دائماً"), level: "h2" }),
+        el("heading", {
+          text: L("Your storefront, always open", "متجرك مفتوح دائماً"),
+          level: "h2",
+        }),
         el("text", {
           text: L(
             "Every Business Profile includes a branded page with your logo, description, working hours and all active listings — shareable anywhere.",
@@ -273,13 +333,19 @@ export const businessProfileContainers = (): Container[] => [
         }),
         el("icons", {
           items: [
-            { icon: "ShieldCheck", label: L("Verified business", "نشاط موثق") },
-            { icon: "Phone", label: L("Direct contact", "تواصل مباشر") },
-            { icon: "Store", label: L("Branded page", "صفحة بعلامتك") },
+            { icon: "shieldCheck", label: L("Verified business", "نشاط موثق") },
+            { icon: "phone", label: L("Direct contact", "تواصل مباشر") },
+            { icon: "store", label: L("Branded page", "صفحة بعلامتك") },
           ],
         }),
       ],
-      [el("image", { src: "__app__", alt: L("4Sale business profile on mobile", "الملف التجاري على الجوال"), height: 300 })],
+      [
+        el("image", {
+          src: "__app__",
+          alt: L("4Sale business profile on mobile", "الملف التجاري على الجوال"),
+          height: 300,
+        }),
+      ],
     ],
   },
   {
@@ -288,20 +354,16 @@ export const businessProfileContainers = (): Container[] => [
     background: "gray",
     columns: [
       [
-        el("heading", { text: L("Live inventory on your page", "مخزونك مباشرة على صفحتك"), level: "h2", align: "center" }),
-        // Seeded with a branch already selected and two facets applied, so the
-        // demo page opens the cascade three levels deep with the filter rail
-        // already narrowed. `items` stays empty — the block is meant to show
-        // its unpreviewed state until someone runs the picker.
-        el("listings", {
-          categoryPath: [
-            { id: "cars", name: L("Cars", "سيارات") },
-            { id: "cars-toyota", name: L("Toyota", "تويوتا") },
-            { id: "cars-toyota-landcruiser", name: L("Land Cruiser", "لاند كروزر") },
-          ],
-          filters: { year: ["2025", "2024"], transmission: ["automatic"] },
-          filterSummary: [L("2025", "2025"), L("2024", "2024"), L("Automatic", "أوتوماتيك")],
+        el("heading", {
+          text: L("Live inventory on your page", "مخزونك مباشرة على صفحتك"),
+          level: "h2",
+          align: "center",
         }),
+        // Left unconfigured on purpose: the block opens on "All categories" with
+        // no subcategory dropdowns and no keyword, which is the state a new one
+        // starts in. Seeding a branch here made the demo page look like a
+        // category was required.
+        el("listings", {}),
       ],
     ],
   },
@@ -321,7 +383,10 @@ export const businessProfileContainers = (): Container[] => [
     background: "soft",
     columns: [
       [
-        el("heading", { text: L("Talk to our business team", "تحدث مع فريق الأعمال"), level: "h2" }),
+        el("heading", {
+          text: L("Talk to our business team", "تحدث مع فريق الأعمال"),
+          level: "h2",
+        }),
         el("text", {
           text: L(
             "Send your details and a 4Sale specialist will walk you through pricing and setup.",
@@ -348,7 +413,10 @@ export const seedPage = (): LandingPage => ({
   status: "draft",
   languages: ["en", "ar"],
   seo: {
-    title: L("Business Profile on 4Sale — Grow Your Business", "الملف التجاري على فورسيل — طوّر تجارتك"),
+    title: L(
+      "Business Profile on 4Sale — Grow Your Business",
+      "الملف التجاري على فورسيل — طوّر تجارتك",
+    ),
     description: L(
       "Request a verified 4Sale Business Profile to reach millions of buyers in Kuwait with priority visibility and performance insights.",
       "اطلب ملفاً تجارياً موثقاً على فورسيل للوصول إلى ملايين المشترين في الكويت.",
@@ -369,7 +437,8 @@ export const seedTemplates = (): Template[] => [
   {
     id: uid(),
     name: "Business Lead Generation",
-    description: "Hero, benefits, how it works, lead form and closing CTA. Built from the Business Profile page.",
+    description:
+      "Hero, benefits, how it works, lead form and closing CTA. Built from the Business Profile page.",
     category: "Lead generation",
     containers: businessProfileContainers(),
     system: true,
@@ -377,7 +446,8 @@ export const seedTemplates = (): Template[] => [
   {
     id: uid(),
     name: "Campaign Promo",
-    description: "Short promotional page: bold hero, three value cards and a full-width CTA banner.",
+    description:
+      "Short promotional page: bold hero, three value cards and a full-width CTA banner.",
     category: "Campaign",
     system: true,
     containers: [
@@ -389,8 +459,18 @@ export const seedTemplates = (): Template[] => [
         align: "center",
         columns: [
           [
-            el("heading", { text: L("Summer deals are live", "عروض الصيف الآن"), level: "h1", align: "center" }),
-            el("text", { text: L("Limited-time offers across every category.", "عروض لفترة محدودة في كل الفئات."), align: "center" }),
+            el("heading", {
+              text: L("Summer deals are live", "عروض الصيف الآن"),
+              level: "h1",
+              align: "center",
+            }),
+            el("text", {
+              text: L(
+                "Limited-time offers across every category.",
+                "عروض لفترة محدودة في كل الفئات.",
+              ),
+              align: "center",
+            }),
             el("cta", {
               label: L("Browse offers", "تصفح العروض"),
               action: "search",
@@ -409,7 +489,8 @@ export const seedTemplates = (): Template[] => [
   {
     id: uid(),
     name: "Category SEO Page",
-    description: "SEO landing structure: intro copy, live listings block, FAQ and app deep-link CTA.",
+    description:
+      "SEO landing structure: intro copy, live listings block, FAQ and app deep-link CTA.",
     category: "SEO",
     system: true,
     containers: [
@@ -418,13 +499,30 @@ export const seedTemplates = (): Template[] => [
         name: "Intro",
         columns: [
           [
-            el("heading", { text: L("Used cars for sale in Kuwait", "سيارات مستعملة للبيع في الكويت"), level: "h1" }),
+            el("heading", {
+              text: L("Used cars for sale in Kuwait", "سيارات مستعملة للبيع في الكويت"),
+              level: "h1",
+            }),
             el("text", {}),
           ],
         ],
       },
-      { ...newContainer("1", 1), name: "Listings", background: "gray", columns: [[el("listings", {})]] },
-      { ...newContainer("1", 1), name: "FAQ", columns: [[el("heading", { text: L("Common questions", "أسئلة شائعة"), level: "h2" }), el("faq", {})]] },
+      {
+        ...newContainer("1", 1),
+        name: "Listings",
+        background: "gray",
+        columns: [[el("listings", {})]],
+      },
+      {
+        ...newContainer("1", 1),
+        name: "FAQ",
+        columns: [
+          [
+            el("heading", { text: L("Common questions", "أسئلة شائعة"), level: "h2" }),
+            el("faq", {}),
+          ],
+        ],
+      },
       {
         ...newContainer("1", 1),
         name: "App CTA",
@@ -446,15 +544,6 @@ export const seedTemplates = (): Template[] => [
       },
     ],
   },
-];
-
-export const MOCK_LISTINGS = [
-  { title: "Toyota Land Cruiser GXR 2022", price: "12,500 KD", area: "Kuwait City", tag: "Verified" },
-  { title: "Toyota Land Cruiser VXR 2021", price: "14,200 KD", area: "Hawally", tag: "Featured" },
-  { title: "Toyota Land Cruiser 2020", price: "10,900 KD", area: "Salmiya", tag: "Verified" },
-  { title: "Toyota Land Cruiser 2019", price: "9,750 KD", area: "Jahra", tag: "Verified" },
-  { title: "Toyota Land Cruiser 2023", price: "16,400 KD", area: "Farwaniya", tag: "New" },
-  { title: "Toyota Land Cruiser 2018", price: "8,300 KD", area: "Ahmadi", tag: "Verified" },
 ];
 
 export const IMAGE_MAP: Record<string, string> = {

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="4Sale">
+  <title>4Sale</title>
+  <!--
+    Tab icon: the 4Sale mark, replacing the Lovable template default.
+
+    #1d4aff is the sRGB form of the brand token in styles.css,
+    oklch(0.556 0.2453 261.33). A favicon is fetched as a standalone document, so
+    it cannot read the app's CSS custom properties and the value must be literal.
+
+    Note for editors: this is XML, so a comment can never contain two hyphens in
+    a row. Writing the CSS variable name here with its leading dashes makes the
+    whole file unparseable and the browser silently keeps its cached icon.
+
+    The wordmark uses textLength/lengthAdjust rather than trusting font metrics:
+    the icon renders on machines with no particular font installed, and this
+    pins the width so it always sits inside the tile.
+  -->
+  <rect width="64" height="64" rx="14" fill="#1d4aff" />
+  <text
+    x="32"
+    y="39"
+    fill="#ffffff"
+    font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+    font-size="20"
+    font-weight="700"
+    text-anchor="middle"
+    textLength="46"
+    lengthAdjust="spacingAndGlyphs"
+  >4SALE</text>
+</svg>
