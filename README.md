@@ -1,4 +1,4 @@
-# 4Sale Page Studio
+# landing-page-generator
 
 Build a high-fidelity interactive prototype for a 4Sale Generic Landing Page Builder / Customizer.
 

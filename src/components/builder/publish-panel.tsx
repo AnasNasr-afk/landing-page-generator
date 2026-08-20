@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import type { Lang } from "@/lib/builder-types";
 import { PUBLISH_API } from "@/lib/publish/config";
 import { type PublishPayload, publishedUrl, standaloneDocument } from "@/lib/publish/payload";
-import { LucideIcon } from "./renderer";
+import { UiIcon as Icon } from "./ui-icon";
 
 type View = { key: string; label: string; lang?: Lang };
 
@@ -128,14 +128,14 @@ export function PublishPanel({
               onClick={copy}
               className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-neutral-surface"
             >
-              <LucideIcon name="Copy" className="size-3.5" /> Copy
+              <Icon name="Copy" className="size-3.5" /> Copy
             </button>
             <button
               type="button"
               onClick={download}
               className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-neutral-surface"
             >
-              <LucideIcon name="Download" className="size-3.5" /> Download
+              <Icon name="Download" className="size-3.5" /> Download
             </button>
             {published && active?.lang && (
               <a
@@ -144,7 +144,7 @@ export function PublishPanel({
                 rel="noopener noreferrer"
                 className="flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-xs font-semibold text-brand-foreground hover:bg-brand-strong"
               >
-                <LucideIcon name="ExternalLink" className="size-3.5" /> Open published page
+                <Icon name="ExternalLink" className="size-3.5" /> Open published page
               </a>
             )}
           </div>

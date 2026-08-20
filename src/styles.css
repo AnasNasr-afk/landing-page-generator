@@ -73,6 +73,42 @@
   --color-brand-foreground: var(--brand-foreground);
   --color-brand-soft: var(--brand-soft);
   --color-neutral-surface: var(--neutral-surface);
+  /* The 4Sale ramps, exposed so the listings block can paint the same greys
+     and accents the real cards use rather than approximating them. */
+  --color-fs-prim-50: var(--fs-prim-50);
+  --color-fs-prim-100: var(--fs-prim-100);
+  --color-fs-prim-500: var(--fs-prim-500);
+  --color-fs-prim-600: var(--fs-prim-600);
+  --color-fs-neutral-50: var(--fs-neutral-50);
+  --color-fs-neutral-100: var(--fs-neutral-100);
+  --color-fs-neutral-200: var(--fs-neutral-200);
+  --color-fs-neutral-500: var(--fs-neutral-500);
+  --color-fs-neutral-600: var(--fs-neutral-600);
+  --color-fs-neutral-900: var(--fs-neutral-900);
+  --color-fs-energy-500: var(--fs-energy-500);
+  --color-fs-energy-700: var(--fs-energy-700);
+  --color-fs-success-500: var(--fs-success-500);
+  --color-fs-success-600: var(--fs-success-600);
+  --color-fs-success-50: var(--fs-success-50);
+  --color-fs-warning-50: var(--fs-warning-50);
+  --color-fs-warning-500: var(--fs-warning-500);
+  --color-fs-warning-600: var(--fs-warning-600);
+  --color-fs-error-50: var(--fs-error-50);
+  --color-fs-error-500: var(--fs-error-500);
+  --color-fs-error-600: var(--fs-error-600);
+  --color-fs-energy-50: var(--fs-energy-50);
+  --color-fs-energy-600: var(--fs-energy-600);
+  --color-fs-purple-50: var(--fs-purple-50);
+  --color-fs-purple-500: var(--fs-purple-500);
+  --color-fs-purple-600: var(--fs-purple-600);
+  /*
+   * 4Sale's elevation scale. A card's resting outline is `el-lvl-1` — a 1px
+   * `neutral_100` ring drawn as a spread shadow, with no drop shadow at all —
+   * and hover raises it to `el-lvl-4`. Using a real border instead reads a
+   * shade too heavy, because the border colour would be `neutral_200`.
+   */
+  --shadow-fs-1: 0 0 0 1px var(--fs-neutral-100);
+  --shadow-fs-4: 0 0 0 1px var(--fs-neutral-100), 0 6px 20px rgba(9, 43, 76, 0.1);
   --shadow-card: 0 1px 2px oklch(0.2 0.03 264 / 0.05), 0 8px 24px -12px oklch(0.2 0.03 264 / 0.12);
   --shadow-lift: 0 12px 32px -12px oklch(0.52 0.26 264 / 0.25);
   --shadow-brand: 0 8px 20px -8px oklch(0.52 0.26 264 / 0.55);
@@ -121,30 +157,76 @@
 
 :root {
   --radius: 0.75rem;
-  --brand: oklch(0.522 0.264 264.4);
-  --brand-strong: oklch(0.455 0.243 264.4);
-  --brand-foreground: oklch(0.99 0 0);
-  --brand-soft: oklch(0.968 0.019 264.4);
-  --neutral-surface: oklch(0.973 0.002 264);
+  /*
+   * The 4Sale design-system palette, taken from the tokens q84sale.com ships
+   * in production (--prim_500, --neutral_600, …) and converted to oklch.
+   * The hex on each line is the source value; keep them in step.
+   *
+   * Source: the Foundation file's 4Sale mode (not the Q8Car mode beside it).
+   * These are the design system's values, which differ from the older tokens
+   * q84sale.com still ships in _colors.css — see docs/palette.md.
+   */
+  --fs-prim-50: oklch(0.9708 0.0137 272.69); /* #f2f5ff */
+  --fs-prim-100: oklch(0.9280 0.0345 274.98); /* #e0e6ff */
+  --fs-prim-500: oklch(0.5197 0.2678 265.34); /* #1d4aff */
+  --fs-prim-600: oklch(0.4848 0.2487 265.38); /* #1a43e8 */
+  --fs-neutral-50: oklch(0.9732 0.0041 271.37); /* #f5f6f9 */
+  --fs-neutral-100: oklch(0.9386 0.0108 280.47); /* #e9eaf2 */
+  --fs-neutral-200: oklch(0.9114 0.0151 277.84); /* #dfe1ec */
+  --fs-neutral-500: oklch(0.6789 0.0579 277.91); /* #8f95bc */
+  --fs-neutral-600: oklch(0.5194 0.0842 276.50); /* #5c6499 */
+  --fs-neutral-900: oklch(0.2150 0.0923 269.45); /* #0a1243 */
+  --fs-energy-500: oklch(0.7000 0.1971 39.91); /* #ff682c */
+  --fs-energy-700: oklch(0.5278 0.1438 40.40); /* #ad471e */
+  --fs-success-500: oklch(0.6844 0.1793 150.35); /* #1db75a */
+  /*
+   * The WhatsApp action on a listing card. Its ink is the 600 step, not 500 —
+   * the same is true of Call and Chat, which use `prim_600` rather than the
+   * `prim_500` the price is painted in.
+   */
+  --fs-success-600: oklch(0.5857 0.1517 150.65); /* #179449 */
+  --fs-success-50: oklch(0.9631 0.0231 161.75); /* #e6f8ee */
+  /*
+   * The rest of 4Sale's accent ramps, so an icon chip can be tinted from the
+   * palette instead of a free colour. Each is the 50 tint, the 500 and the 600
+   * — the same three steps the design system pairs for a toned control.
+   */
+  --fs-warning-50: oklch(0.9798 0.0248 89.21); /* #fff8e6 */
+  --fs-warning-500: oklch(0.8309 0.1714 81.55); /* #ffba00 */
+  --fs-warning-600: oklch(0.6833 0.1408 82.11); /* #c48f00 */
+  --fs-error-50: oklch(0.9568 0.0185 13.38); /* #fdeced */
+  --fs-error-500: oklch(0.6169 0.2043 20.38); /* #e63d4e */
+  --fs-error-600: oklch(0.5497 0.1789 20.21); /* #c43543 */
+  --fs-energy-50: oklch(0.9653 0.0182 43.23); /* #fff0ea */
+  --fs-energy-600: oklch(0.6324 0.1760 40.25); /* #de5b26 */
+  --fs-purple-50: oklch(0.9591 0.0215 294.60); /* #f2efff */
+  --fs-purple-500: oklch(0.6042 0.2252 285.23); /* #7b60ff */
+  --fs-purple-600: oklch(0.5637 0.2091 285.42); /* #7057e8 */
+
+  --brand: var(--fs-prim-500);
+  --brand-strong: var(--fs-prim-600);
+  --brand-foreground: oklch(1 0 0);
+  --brand-soft: var(--fs-prim-50);
+  --neutral-surface: var(--fs-neutral-50);
   --background: oklch(1 0 0);
-  --foreground: oklch(0.129 0.042 264.695);
+  --foreground: var(--fs-neutral-900);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
+  --card-foreground: var(--fs-neutral-900);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.522 0.264 264.4);
+  --popover-foreground: var(--fs-neutral-900);
+  --primary: var(--fs-prim-500);
   --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.968 0.019 264.4);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
-  --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.554 0.046 257.417);
-  --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
-  --destructive: oklch(0.577 0.245 27.325);
+  --secondary: var(--fs-prim-50);
+  --secondary-foreground: var(--fs-neutral-900);
+  --muted: var(--fs-neutral-50);
+  --muted-foreground: var(--fs-neutral-600);
+  --accent: var(--fs-neutral-50);
+  --accent-foreground: var(--fs-neutral-900);
+  --destructive: oklch(0.6169 0.2043 20.38); /* #e63d4e red_500 */
   --destructive-foreground: oklch(0.984 0.003 247.858);
-  --border: oklch(0.929 0.013 255.508);
-  --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.522 0.264 264.4);
+  --border: var(--fs-neutral-200);
+  --input: var(--fs-neutral-200);
+  --ring: var(--fs-prim-500);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
