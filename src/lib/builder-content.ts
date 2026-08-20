@@ -440,8 +440,8 @@ export const seedTemplates = (): Template[] => [
     description:
       "Hero, benefits, how it works, lead form and closing CTA. Built from the Business Profile page.",
     category: "Lead generation",
-    containers: businessProfileContainers(),
     kind: "page",
+    containers: businessProfileContainers(),
     system: true,
   },
   {

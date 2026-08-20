@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
@@ -14,6 +14,7 @@ import {
   type Lang,
   type LandingPage,
   type Template,
+  type TemplateKind,
   containerDirection,
   containerTracks,
   defaultTracks,
@@ -118,7 +119,17 @@ function BuilderApp() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const trackDrag = useRef<{ id: string; tracks: number[] } | null>(null);
   const heightDrag = useRef<number>(0);
-  const [saveTpl, setSaveTpl] = useState(false);
+  /** What the save dialog is capturing, or null when it is closed. */
+  const [saveTpl, setSaveTpl] = useState<{
+    kind: TemplateKind;
+    containerId?: string;
+    containerName?: string;
+  } | null>(null);
+  const [savingTpl, setSavingTpl] = useState(false);
+  const [templatesLoading, setTemplatesLoading] = useState(true);
+  const [pagesLoading, setPagesLoading] = useState(true);
+  const [openingPage, setOpeningPage] = useState<string | null>(null);
+  const [deletingPage, setDeletingPage] = useState<string | null>(null);
   const [output, setOutput] = useState<{
     payload: PublishPayload;
     published: boolean;
@@ -430,12 +441,6 @@ function BuilderApp() {
   const fireCta = (c: Cta) =>
     toast(`Tracking: ${c.event}`, { description: `${c.action} → ${c.destination || "—"}` });
 
-  /**
-   * Starts a new page from a template, replacing the canvas.
-   *
-   * Goes through `reId` so the copy shares no ids with the template — the new
-   * page must be editable without writing back into the library.
-   */
   const startFromTemplate = (tpl: Template) => {
     const containers = reId(tpl.containers);
 
@@ -701,7 +706,7 @@ function BuilderApp() {
     setDeletingPage(summary.slug);
     try {
       await deletePageRequest(summary.slug);
-      setPages((current) => current.filter((page) => page.slug !== summary.slug));
+      setPages((current) => current.filter((item) => item.slug !== summary.slug));
       if (page.slug === summary.slug) setPage((current) => ({ ...current, status: "draft" }));
       toast.success("Page deleted", { description: `/${summary.slug}` });
     } catch (error) {
@@ -814,10 +819,7 @@ function BuilderApp() {
                       : "text-muted-foreground",
                   )}
                 >
-                  <LucideIcon
-                    name={d === "desktop" ? "Monitor" : "Smartphone"}
-                    className="size-3.5"
-                  />
+                  <Icon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
                 </button>
               ))}
             </div>
@@ -862,7 +864,32 @@ function BuilderApp() {
           </div>
         </header>
 
-        {nav === "build" ? (
+        {nav === "pages" ? (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <PagesScreen
+              pages={pages}
+              loading={pagesLoading}
+              opening={openingPage}
+              deleting={deletingPage}
+              onOpen={openPublishedPage}
+              onDelete={removePublishedPage}
+              onRefresh={() => {
+                setPagesLoading(true);
+                fetchPages()
+                  .then(setPages)
+                  .catch((error: unknown) =>
+                    toast.error("Couldn't refresh pages", {
+                      description:
+                        error instanceof Error
+                          ? error.message
+                          : "The publishing API is unreachable.",
+                    }),
+                  )
+                  .finally(() => setPagesLoading(false));
+              }}
+            />
+          </div>
+        ) : nav === "build" ? (
           <div className="min-h-0 flex-1">
             <ResizablePanelGroup id="builder" className="h-full">
               <ResizablePanel
@@ -880,7 +907,15 @@ function BuilderApp() {
                     onAddElement={addElement}
                     canAddElement={!!container && sel?.colIndex != null}
                     targetLabel={targetLabel}
+                    blocks={blocks}
+                    blocksLoading={templatesLoading}
                     onDragElement={(type) => setDrag({ kind: "new", type })}
+                    onDragBlock={(templateId) => setDrag({ kind: "block", templateId })}
+                    onAddBlock={(tpl) => {
+                      const at = page.containers.findIndex((c) => c.id === sel?.containerId);
+                      insertBlock(tpl, at < 0 ? page.containers.length : at + 1);
+                    }}
+                    onDeleteBlock={removeTemplate}
                     onDragEnd={endDrag}
                   />
                 </div>
@@ -901,23 +936,32 @@ function BuilderApp() {
                       )}
                       dir={lang === "ar" ? "rtl" : "ltr"}
                     >
-                      {page.containers.map((c) => {
+                      {page.containers.map((c, index) => {
                         const active = sel?.containerId === c.id && !sel.elementId;
                         const inContainer = sel?.containerId === c.id;
                         const vertical = containerDirection(c.direction) === "vertical";
                         const tracks = containerTracks(c);
                         return (
-                          <div
-                            key={c.id}
-                            className={cn(
-                              "group relative border-2 transition",
-                              active ? "border-brand" : "border-transparent hover:border-brand/30",
-                            )}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSel({ containerId: c.id, colIndex: 0, elementId: null });
-                            }}
-                          >
+                          <Fragment key={c.id}>
+                            {containerGap(index)}
+                            <div
+                              ref={(node) => {
+                                if (node) containerNodes.current.set(c.id, node);
+                                else containerNodes.current.delete(c.id);
+                              }}
+                              className={cn(
+                                "group relative border-2 transition",
+                                flash === c.id
+                                  ? "border-brand ring-4 ring-brand/30"
+                                  : active
+                                    ? "border-brand"
+                                    : "border-transparent hover:border-brand/30",
+                              )}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSel({ containerId: c.id, colIndex: 0, elementId: null });
+                              }}
+                            >
                             <div
                               className={cn(
                                 "absolute -top-px start-0 z-20 rounded-be-lg bg-brand px-2 py-0.5 text-[10px] font-semibold text-brand-foreground transition",
@@ -941,7 +985,7 @@ function BuilderApp() {
                                     // Dropping anywhere in the column that isn't over an
                                     // element appends to the end.
                                     onDragOver={(e) => {
-                                      if (!drag) return;
+                                      if (!elementDrag) return;
                                       e.preventDefault();
                                       hoverSlot({
                                         containerId: c.id,
@@ -950,16 +994,16 @@ function BuilderApp() {
                                       });
                                     }}
                                     onDrop={(e) => {
-                                      if (!drag) return;
+                                      if (!elementDrag) return;
                                       e.preventDefault();
                                       e.stopPropagation();
                                       completeDrop();
                                     }}
                                     className={cn(
                                       "relative h-full min-h-16 space-y-5 rounded-xl border border-dashed p-2 transition",
-                                      drag && colTargeted
+                                      elementDrag && colTargeted
                                         ? "border-brand bg-brand/10"
-                                        : drag
+                                        : elementDrag
                                           ? "border-brand/40"
                                           : colActive
                                             ? "border-brand bg-brand/5"
@@ -968,7 +1012,7 @@ function BuilderApp() {
                                   >
                                     {col.length === 0 && (
                                       <div className="flex h-16 items-center justify-center text-[11px] text-muted-foreground">
-                                        {drag
+                                        {elementDrag
                                           ? "Drop here"
                                           : "Empty column — drag an element in, or select this column"}
                                       </div>
@@ -1004,7 +1048,7 @@ function BuilderApp() {
                                           }}
                                           onDragEnd={endDrag}
                                           onDragOver={(e) => {
-                                            if (!drag) return;
+                                            if (!elementDrag) return;
                                             e.preventDefault();
                                             e.stopPropagation();
                                             slotFromPointer(e, c.id, ci, ei);
@@ -1120,8 +1164,11 @@ function BuilderApp() {
                               />
                             ) : null}
                           </div>
+                          </Fragment>
                         );
                       })}
+
+                      {containerGap(page.containers.length)}
 
                       <button
                         type="button"
@@ -1157,6 +1204,14 @@ function BuilderApp() {
                       onDeleteElement={deleteElement}
                       onMoveElement={moveElement}
                       onDuplicateContainer={duplicateContainer}
+                      onSaveContainerAsBlock={() =>
+                        container &&
+                        setSaveTpl({
+                          kind: "block",
+                          containerId: container.id,
+                          containerName: container.name,
+                        })
+                      }
                       onDeleteContainer={deleteContainer}
                       onMoveContainer={moveContainer}
                     />
@@ -1249,10 +1304,7 @@ function BuilderApp() {
                         : "text-muted-foreground",
                     )}
                   >
-                    <LucideIcon
-                      name={d === "desktop" ? "Monitor" : "Smartphone"}
-                      className="size-3.5"
-                    />
+                    <Icon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
                   </button>
                 ))}
               </div>

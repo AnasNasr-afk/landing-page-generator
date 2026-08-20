@@ -1,6 +1,6 @@
 import type { PageSummary } from "@/lib/page-api";
 import type { Lang } from "@/lib/builder-types";
-import { LucideIcon } from "./renderer";
+import { UiIcon as Icon } from "./ui-icon";
 import { Pill } from "./controls";
 
 export function PagesScreen({
@@ -35,7 +35,7 @@ export function PagesScreen({
           onClick={onRefresh}
           className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-neutral-surface"
         >
-          <LucideIcon name="RefreshCw" className="size-3.5" /> Refresh
+          <Icon name="RefreshCw" className="size-3.5" /> Refresh
         </button>
       </header>
 
@@ -105,7 +105,7 @@ function PageCard({
             page.editable ? "Open this page in the builder" : "Editable source is not available"
           }
         >
-          <LucideIcon name={opening ? "LoaderCircle" : "Pencil"} className="size-3.5" />
+          <Icon name={opening ? "LoaderCircle" : "Pencil"} className="size-3.5" />
           {opening ? "Opening…" : page.editable ? "Edit page" : "Not editable"}
         </button>
         <button
@@ -115,7 +115,7 @@ function PageCard({
           className="rounded-lg border border-border px-3 py-2 text-xs font-semibold text-destructive hover:border-destructive disabled:cursor-not-allowed disabled:opacity-45"
           title="Delete page"
         >
-          <LucideIcon name={deleting ? "LoaderCircle" : "Trash2"} className="size-3.5" />
+          <Icon name={deleting ? "LoaderCircle" : "Trash2"} className="size-3.5" />
         </button>
       </div>
     </article>

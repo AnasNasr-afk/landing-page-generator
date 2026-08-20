@@ -3,7 +3,7 @@ import { containerDirection, type Template } from "@/lib/builder-types";
 import { cn } from "@/lib/utils";
 import { UiIcon as Icon } from "./ui-icon";
 import { type Template, type TemplateKind } from "@/lib/builder-types";
-import { LucideIcon } from "./renderer";
+import { UiIcon as Icon } from "./ui-icon";
 import { BlockPreview } from "./block-preview";
 import { Field, Pill, TextArea, TextInput } from "./controls";
 
@@ -152,7 +152,7 @@ function TemplateCard({
               title="Delete template"
               className="rounded-lg border border-border p-2 text-muted-foreground hover:border-destructive hover:text-destructive"
             >
-              <LucideIcon name="Trash2" className="size-3.5" />
+              <Icon name="Trash2" className="size-3.5" />
             </button>
           )}
         </div>
