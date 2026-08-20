@@ -49,7 +49,6 @@ import {
   SaveTemplateDialog,
   TemplatesScreen,
 } from "@/components/builder/templates-screen";
-import { PagesScreen } from "@/components/builder/pages-screen";
 import { PublishPanel } from "@/components/builder/publish-panel";
 import { EdgeResizeHandle, BoxResizeFrame } from "@/components/builder/resize-handle";
 import {

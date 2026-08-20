@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { containerDirection, type Template } from "@/lib/builder-types";
+import { cn } from "@/lib/utils";
+import { UiIcon as Icon } from "./ui-icon";
 import { type Template, type TemplateKind } from "@/lib/builder-types";
 import { UiIcon as Icon } from "./ui-icon";
 import { BlockPreview } from "./block-preview";
@@ -52,7 +55,55 @@ export function TemplatesScreen({
         </button>
 
         {templates.map((tpl) => (
-          <TemplateCard key={tpl.id} tpl={tpl} onUse={onUse} onDelete={onDelete} />
+          <div
+            key={tpl.id}
+            className="flex min-h-52 flex-col overflow-hidden rounded-2xl border border-border bg-background transition hover:shadow-lift"
+          >
+            <div className="flex-1 space-y-1.5 bg-neutral-surface p-4">
+              {tpl.containers.slice(0, 5).map((c) => (
+                <div
+                  key={c.id}
+                  className={cn("flex gap-1.5", containerDirection(c.direction) === "vertical" && "flex-col")}
+                  style={{ height: Math.max(8, c.paddingY / 6) }}
+                >
+                  {c.columns.map((_, i) => (
+                    <div
+                      key={i}
+                      className={
+                        "flex-1 rounded-sm " +
+                        (c.background === "brand" ? "bg-brand/70" : c.background === "soft" ? "bg-brand/20" : "bg-neutral-300/60")
+                      }
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="text-sm font-semibold">{tpl.name}</h3>
+                <Pill tone={tpl.system ? "muted" : "brand"}>{tpl.system ? "System" : "Saved"}</Pill>
+              </div>
+              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{tpl.description}</p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onUse(tpl)}
+                  className="flex-1 rounded-lg bg-brand px-3 py-2 text-xs font-semibold text-brand-foreground hover:bg-brand-strong"
+                >
+                  Use template
+                </button>
+                {!tpl.system && (
+                  <button
+                    type="button"
+                    onClick={() => onDelete(tpl.id)}
+                    className="rounded-lg border border-border p-2 text-muted-foreground hover:border-destructive hover:text-destructive"
+                  >
+                    <Icon name="Trash2" className="size-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
         ))}
       </div>
 
