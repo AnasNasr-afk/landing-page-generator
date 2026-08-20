@@ -24,8 +24,15 @@ import {
 } from "@/lib/builder-types";
 import { newContainer, newElement, seedPage, seedTemplates } from "@/lib/builder-content";
 import {
+  createTemplate,
+  deleteTemplate as deleteTemplateRequest,
+  fetchTemplates,
+} from "@/lib/template-api";
+import {
+  type ContainerSlot,
   type DragPayload,
   type DropSlot,
+  insertContainers,
   isNoOpDrop,
   moveElement as moveElementTo,
   putElement,
@@ -43,6 +50,12 @@ import {
 } from "@/components/builder/templates-screen";
 import { PublishPanel } from "@/components/builder/publish-panel";
 import { EdgeResizeHandle, BoxResizeFrame } from "@/components/builder/resize-handle";
+import {
+  deletePage as deletePageRequest,
+  fetchPageForEditing,
+  fetchPages,
+  type PageSummary,
+} from "@/lib/page-api";
 import {
   type PublishPayload,
   buildPayload,
@@ -74,11 +87,12 @@ export const Route = createFileRoute("/")({
   component: BuilderApp,
 });
 
-type Nav = "build" | "templates" | "seo" | "assets";
+type Nav = "build" | "pages" | "templates" | "seo" | "assets";
 type Selection = { containerId: string; colIndex: number | null; elementId: string | null } | null;
 
 const NAV: { key: Nav; icon: string; label: string }[] = [
   { key: "build", icon: "LayoutPanelTop", label: "Build" },
+  { key: "pages", icon: "Files", label: "Pages" },
   { key: "templates", icon: "LayoutTemplate", label: "Templates" },
   { key: "seo", icon: "Search", label: "SEO" },
   { key: "assets", icon: "Images", label: "Assets" },
@@ -94,6 +108,7 @@ const clampZoom = (n: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.roun
 function BuilderApp() {
   const [page, setPage] = useState<LandingPage>(seedPage);
   const [templates, setTemplates] = useState<Template[]>(seedTemplates);
+  const [pages, setPages] = useState<PageSummary[]>([]);
   const [nav, setNav] = useState<Nav>("build");
   const [lang, setLang] = useState<Lang>("en");
   const [sel, setSel] = useState<Selection>(null);
@@ -111,6 +126,22 @@ function BuilderApp() {
   const [publishing, setPublishing] = useState(false);
   const [drag, setDrag] = useState<DragPayload | null>(null);
   const [dropSlot, setDropSlot] = useState<DropSlot | null>(null);
+  /** Where a dragged block would land: an insertion index between containers. */
+  const [containerSlot, setContainerSlot] = useState<ContainerSlot | null>(null);
+  /**
+   * A container to scroll to and outline briefly after it is inserted, so a
+   * block added from a click rather than a drop is not a silent change
+   * somewhere off screen.
+   */
+  const [flash, setFlash] = useState<string | null>(null);
+  /**
+   * Canvas nodes by container id, for scrolling to one.
+   *
+   * A ref map rather than a `data-` attribute because `uid()` is random: an id
+   * rendered into the markup differs between the server pass and the client
+   * one, which React reports as a hydration mismatch.
+   */
+  const containerNodes = useRef(new Map<string, HTMLDivElement>());
   /**
    * The single text node being edited in place, canvas-wide. Owned here rather
    * than inside each element so only one node can ever be contentEditable.
@@ -156,6 +187,72 @@ function BuilderApp() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  /**
+   * Saved templates live in the backend; the seeded ones ship with the builder
+   * and stay local, which is why they are kept and the fetched list is only
+   * prepended rather than replacing state.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchTemplates()
+      .then((saved) => {
+        if (!cancelled) setTemplates((ts) => [...saved, ...ts.filter((x) => x.system)]);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toast.error("Couldn't load saved templates", {
+          description:
+            error instanceof Error ? error.message : "The publishing API is unreachable.",
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setTemplatesLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchPages()
+      .then((saved) => {
+        if (!cancelled) setPages(saved);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toast.error("Couldn't load published pages", {
+          description:
+            error instanceof Error ? error.message : "The publishing API is unreachable.",
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setPagesLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /**
+   * Brings a freshly inserted container into view and clears the outline.
+   *
+   * Runs after paint so the node exists; the timeout length only has to
+   * outlast the CSS transition on the ring.
+   */
+  useEffect(() => {
+    if (!flash) return;
+
+    containerNodes.current.get(flash)?.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    const timer = window.setTimeout(() => setFlash(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [flash]);
+
   const container = useMemo(
     () => page.containers.find((c) => c.id === sel?.containerId),
     [page.containers, sel],
@@ -164,6 +261,9 @@ function BuilderApp() {
     if (!container || sel?.colIndex == null || !sel.elementId) return undefined;
     return container.columns[sel.colIndex]?.find((e) => e.id === sel.elementId);
   }, [container, sel]);
+
+  const blocks = useMemo(() => templates.filter((x) => x.kind === "block"), [templates]);
+  const pageTemplates = useMemo(() => templates.filter((x) => x.kind !== "block"), [templates]);
 
   const setContainers = (fn: (cs: Container[]) => Container[]) =>
     setPage((p) => ({ ...p, containers: fn(p.containers), status: "draft" }));
@@ -330,18 +430,80 @@ function BuilderApp() {
   const fireCta = (c: Cta) =>
     toast(`Tracking: ${c.event}`, { description: `${c.action} → ${c.destination || "—"}` });
 
+  /**
+   * Starts a new page from a template, replacing the canvas.
+   *
+   * Goes through `reId` so the copy shares no ids with the template — the new
+   * page must be editable without writing back into the library.
+   */
   const startFromTemplate = (tpl: Template) => {
+    const containers = reId(tpl.containers);
+
     setPage((p) => ({
       ...p,
       id: uid(),
       name: `${tpl.name} page`,
       slug: tpl.name.toLowerCase().replace(/\s+/g, "-"),
       status: "draft",
-      containers: reId(tpl.containers),
+      containers,
     }));
     setSel(null);
     setNav("build");
     toast.success(`New page started from "${tpl.name}"`);
+  };
+
+  /**
+   * Saves the page, or one container, into the shared library.
+   *
+   * The tree is sent through `reId` as well: a template that kept the ids of
+   * the page it came from would collide with that page the moment both were
+   * open in one session.
+   */
+  const saveTemplate = async (name: string, description: string) => {
+    if (!saveTpl) return;
+
+    const source =
+      saveTpl.kind === "block"
+        ? page.containers.filter((c) => c.id === saveTpl.containerId)
+        : page.containers;
+
+    if (source.length === 0) {
+      toast.error("Nothing to save");
+      return;
+    }
+
+    setSavingTpl(true);
+    try {
+      const saved = await createTemplate({
+        name,
+        description,
+        category: saveTpl.kind === "block" ? "Blocks" : "Custom",
+        kind: saveTpl.kind,
+        containers: reId(source),
+      });
+      setTemplates((ts) => [saved, ...ts]);
+      setSaveTpl(null);
+      toast.success(`${saveTpl.kind === "block" ? "Block" : "Template"} "${name}" saved`);
+    } catch (error) {
+      toast.error("Couldn't save", {
+        description: error instanceof Error ? error.message : "The publishing API is unreachable.",
+      });
+    } finally {
+      setSavingTpl(false);
+    }
+  };
+
+  const removeTemplate = async (id: string) => {
+    const previous = templates;
+    setTemplates((ts) => ts.filter((x) => x.id !== id));
+    try {
+      await deleteTemplateRequest(id);
+    } catch (error) {
+      setTemplates(previous);
+      toast.error("Couldn't delete template", {
+        description: error instanceof Error ? error.message : "The publishing API is unreachable.",
+      });
+    }
   };
 
   /**
@@ -382,7 +544,11 @@ function BuilderApp() {
   const endDrag = () => {
     setDrag(null);
     setDropSlot(null);
+    setContainerSlot(null);
   };
+
+  /** A block lands between containers, so column drop targets ignore it. */
+  const elementDrag = drag?.kind === "move" || drag?.kind === "new";
 
   /** Tracks the insertion slot the pointer is currently over. */
   const hoverSlot = (slot: DropSlot) => {
@@ -398,6 +564,8 @@ function BuilderApp() {
 
   const completeDrop = () => {
     if (!drag || !dropSlot) return endDrag();
+
+    if (drag.kind === "block") return endDrag();
 
     if (drag.kind === "new") {
       const el = newElement(drag.type);
@@ -436,14 +604,123 @@ function BuilderApp() {
     dropSlot.colIndex === colIndex &&
     dropSlot.index === index;
 
+  /* ------------------------------------------------------------ blocks on canvas */
+
+  /**
+   * Inserts a saved block and shows where it went.
+   *
+   * Dropping already tells you the position, but adding one by click does not,
+   * so both paths land here and the new container is selected, scrolled to and
+   * outlined for a moment.
+   */
+  const insertBlock = (tpl: Template, index: number) => {
+    const incoming = reId(tpl.containers);
+    const first = incoming[0];
+    if (!first) return;
+
+    setContainers((cs) => insertContainers(cs, index, incoming));
+    setSel({ containerId: first.id, colIndex: null, elementId: null });
+    setNav("build");
+    setFlash(first.id);
+    toast.success(`Block "${tpl.name}" inserted`);
+  };
+
+  /** Tracks which gap between containers a dragged block is pointing at. */
+  const hoverContainerSlot = (index: number) =>
+    setContainerSlot((prev) => (prev?.index === index ? prev : { index }));
+
+  const completeContainerDrop = () => {
+    if (drag?.kind !== "block" || !containerSlot) return endDrag();
+
+    const tpl = templates.find((x) => x.id === drag.templateId);
+    if (tpl) insertBlock(tpl, containerSlot.index);
+    endDrag();
+  };
+
+  /**
+   * The gap between two containers, as a drop target.
+   *
+   * Zero height with an absolutely positioned hit area, so turning the targets
+   * on at the start of a drag does not shift the canvas under the pointer.
+   */
+  const containerGap = (index: number) => {
+    const dragging = drag?.kind === "block";
+    return (
+      <div className="relative h-0">
+        <div
+          onDragOver={(e) => {
+            if (!dragging) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            hoverContainerSlot(index);
+          }}
+          onDrop={(e) => {
+            if (!dragging) return;
+            e.preventDefault();
+            e.stopPropagation();
+            completeContainerDrop();
+          }}
+          className={cn(
+            "absolute inset-x-0 -top-3 z-30 h-6",
+            dragging ? "pointer-events-auto" : "pointer-events-none",
+          )}
+        >
+          {dragging && containerSlot?.index === index && (
+            <span className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-brand shadow-brand" />
+          )}
+        </div>
+      </div>
+    );
+  };
+
   /** Builds the payload locally, so generated HTML is inspectable with no backend. */
   const inspectOutput = () => setOutput({ payload: buildPayload(page), published: false });
+
+  const openPublishedPage = async (summary: PageSummary) => {
+    setOpeningPage(summary.slug);
+    try {
+      const source = await fetchPageForEditing(summary.slug);
+      setPage(source);
+      setLang(source.languages[0] ?? "en");
+      setSel(null);
+      setOutput(null);
+      setNav("build");
+      toast.success(`Opened "${source.name || source.slug}" for editing`);
+    } catch (error) {
+      toast.error("Couldn't open page", {
+        description: error instanceof Error ? error.message : "The publishing API is unreachable.",
+      });
+    } finally {
+      setOpeningPage(null);
+    }
+  };
+
+  const removePublishedPage = async (summary: PageSummary) => {
+    if (!window.confirm(`Delete "${summary.name || summary.slug}"? This cannot be undone.`)) return;
+
+    setDeletingPage(summary.slug);
+    try {
+      await deletePageRequest(summary.slug);
+      setPages((current) => current.filter((page) => page.slug !== summary.slug));
+      if (page.slug === summary.slug) setPage((current) => ({ ...current, status: "draft" }));
+      toast.success("Page deleted", { description: `/${summary.slug}` });
+    } catch (error) {
+      toast.error("Couldn't delete page", {
+        description: error instanceof Error ? error.message : "The publishing API is unreachable.",
+      });
+    } finally {
+      setDeletingPage(null);
+    }
+  };
 
   const handlePublish = async () => {
     setPublishing(true);
     try {
       const payload = await publishPage(page);
       setPage((p) => ({ ...p, status: "published" }));
+      fetchPages()
+        .then(setPages)
+        .catch(() => undefined);
       setOutput({ payload, published: true });
       toast.success("Page published", { description: publishedUrl(payload.slug, lang) });
     } catch (error) {
@@ -537,14 +814,17 @@ function BuilderApp() {
                       : "text-muted-foreground",
                   )}
                 >
-                  <Icon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
+                  <LucideIcon
+                    name={d === "desktop" ? "Monitor" : "Smartphone"}
+                    className="size-3.5"
+                  />
                 </button>
               ))}
             </div>
             <ZoomControls zoom={zoom} onChange={setZoom} />
             <button
               type="button"
-              onClick={() => setSaveTpl(true)}
+              onClick={() => setSaveTpl({ kind: "page" })}
               className="rounded-lg border border-border px-3 py-2 text-xs font-semibold hover:bg-neutral-surface"
             >
               Save as template
@@ -896,7 +1176,8 @@ function BuilderApp() {
         ) : nav === "templates" ? (
           <div className="min-h-0 flex-1 overflow-y-auto">
             <TemplatesScreen
-              templates={templates}
+              templates={pageTemplates}
+              loading={templatesLoading}
               onUse={startFromTemplate}
               onBlank={() => {
                 setPage((p) => ({
@@ -910,7 +1191,7 @@ function BuilderApp() {
                 setSel(null);
                 setNav("build");
               }}
-              onDelete={(id) => setTemplates((ts) => ts.filter((x) => x.id !== id))}
+              onDelete={removeTemplate}
             />
           </div>
         ) : nav === "seo" ? (
@@ -968,7 +1249,10 @@ function BuilderApp() {
                         : "text-muted-foreground",
                     )}
                   >
-                    <Icon name={d === "desktop" ? "Monitor" : "Smartphone"} className="size-3.5" />
+                    <LucideIcon
+                      name={d === "desktop" ? "Monitor" : "Smartphone"}
+                      className="size-3.5"
+                    />
                   </button>
                 ))}
               </div>
@@ -1008,16 +1292,10 @@ function BuilderApp() {
       )}
 
       <SaveTemplateDialog
-        open={saveTpl}
-        onClose={() => setSaveTpl(false)}
-        onSave={(name, description) => {
-          setTemplates((ts) => [
-            { id: uid(), name, description, category: "Custom", containers: reId(page.containers) },
-            ...ts,
-          ]);
-          setSaveTpl(false);
-          toast.success(`Template "${name}" saved`);
-        }}
+        target={saveTpl}
+        saving={savingTpl}
+        onClose={() => setSaveTpl(null)}
+        onSave={saveTemplate}
       />
     </div>
   );

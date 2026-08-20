@@ -745,6 +745,7 @@ export function PropertiesPanel({
   onDeleteElement,
   onMoveElement,
   onDuplicateContainer,
+  onSaveContainerAsBlock,
   onDeleteContainer,
   onMoveContainer,
 }: {
@@ -756,6 +757,8 @@ export function PropertiesPanel({
   onDeleteElement: () => void;
   onMoveElement: (dir: -1 | 1) => void;
   onDuplicateContainer: () => void;
+  /** Saves this container to the shared library as a reusable block. */
+  onSaveContainerAsBlock: () => void;
   onDeleteContainer: () => void;
   onMoveContainer: (dir: -1 | 1) => void;
 }) {

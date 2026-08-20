@@ -22,10 +22,22 @@ export type DropSlot = {
   index: number;
 };
 
-/** What is being dragged: an existing element, or a new one from the library. */
+/**
+ * Where a container drag is pointing: an insertion index in the page.
+ *
+ * Separate from `DropSlot` because a block is a whole container and lands
+ * between containers, not inside a column.
+ */
+export type ContainerSlot = { index: number };
+
+/**
+ * What is being dragged: an existing element, a new one from the library, or
+ * a saved block — a whole container pulled from the template library.
+ */
 export type DragPayload =
   | { kind: "move"; containerId: string; colIndex: number; elementId: string }
-  | { kind: "new"; type: ElementType };
+  | { kind: "new"; type: ElementType }
+  | { kind: "block"; templateId: string };
 
 /** Removes an element, returning the new tree plus the element and its old index. */
 export function takeElement(
@@ -124,6 +136,16 @@ export function setLocalizedText(
   node[last] = { ...existing, [lang]: value };
 
   return next as ElementProps;
+}
+
+/** Inserts containers into the page at an index, clamped to its bounds. */
+export function insertContainers(
+  containers: Container[],
+  index: number,
+  incoming: Container[],
+): Container[] {
+  const at = Math.max(0, Math.min(index, containers.length));
+  return [...containers.slice(0, at), ...incoming, ...containers.slice(at)];
 }
 
 /** True when a drop would leave the element exactly where it already is. */
