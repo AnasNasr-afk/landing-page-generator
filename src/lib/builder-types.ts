@@ -276,12 +276,24 @@ export type LandingPage = {
   containers: Container[];
 };
 
+/**
+ * How a saved template is reused.
+ *
+ * `page` replaces the canvas and starts a new landing page; `block` is a
+ * single container inserted into the page already open. The distinction is
+ * what the marketing team actually does day to day — one hero or one lead
+ * form gets reused far more often than a whole page.
+ */
+export type TemplateKind = "page" | "block";
+
 export type Template = {
   id: string;
   name: string;
   description: string;
   category: string;
+  kind: TemplateKind;
   containers: Container[];
+  /** Shipped with the builder, so it cannot be deleted from the library. */
   system?: boolean;
 };
 

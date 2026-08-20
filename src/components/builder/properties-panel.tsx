@@ -745,6 +745,7 @@ export function PropertiesPanel({
   onDeleteElement,
   onMoveElement,
   onDuplicateContainer,
+  onSaveContainerAsBlock,
   onDeleteContainer,
   onMoveContainer,
 }: {
@@ -756,6 +757,7 @@ export function PropertiesPanel({
   onDeleteElement: () => void;
   onMoveElement: (dir: -1 | 1) => void;
   onDuplicateContainer: () => void;
+  onSaveContainerAsBlock: () => void;
   onDeleteContainer: () => void;
   onMoveContainer: (dir: -1 | 1) => void;
 }) {
@@ -799,7 +801,12 @@ export function PropertiesPanel({
               <>
                 <IconBtn icon="ArrowUp" onClick={() => onMoveContainer(-1)} />
                 <IconBtn icon="ArrowDown" onClick={() => onMoveContainer(1)} />
-                <IconBtn icon="Copy" onClick={onDuplicateContainer} />
+                <IconBtn icon="Copy" title="Duplicate" onClick={onDuplicateContainer} />
+                <IconBtn
+                  icon="BookmarkPlus"
+                  title="Save as block"
+                  onClick={onSaveContainerAsBlock}
+                />
                 <IconBtn
                   icon="Trash2"
                   danger
